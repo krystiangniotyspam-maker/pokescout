@@ -13,14 +13,14 @@ on:
 permissions:
   contents: write
 
-concurrency:
-  group: data-write
+concurrency:               # osobna grupa: pliki Reddita nie kolidują z cenami
+  group: reddit-write
   cancel-in-progress: false
 
 jobs:
   run:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 60
     env:
       PYTHONUNBUFFERED: "1"
     steps:
@@ -31,7 +31,7 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Pobierz posty (Arctic Shift)
-        timeout-minutes: 160
+        timeout-minutes: 50
         run: python scripts/collect_reddit.py --start ${{ inputs.start || '2024-01-01' }}
       - name: Zapisz dane w repo
         if: always()
