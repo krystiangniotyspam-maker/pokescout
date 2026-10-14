@@ -15,7 +15,9 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from pokescout.buzz import buzz_features, load_reddit  # noqa: E402
 from pokescout.data import load_repo_history  # noqa: E402
+from pokescout.tiers import pokemon_key  # noqa: E402
 from pokescout.evaluate import (FEATURES, HORIZONS, build_panel, combo_score, evaluate_scores,  # noqa: E402
                                 fit_latest, walk_forward)
 
@@ -43,7 +45,10 @@ def main() -> int:
     if not n_days:
         print("Brak danych w data/prices")
         return 1
-    panel = build_panel(prices, metas, sealed)
+    posts = load_reddit(a.data)
+    buzz = buzz_features(posts, {pokemon_key(m.name) for m in metas.values()}) if len(posts) else None
+    print(f"Posty z Reddita: {len(posts)}")
+    panel = build_panel(prices, metas, sealed, buzz=buzz)
     print(f"Panel: {len(panel)} wierszy, {panel.date.nunique()} dat, {panel.card_id.nunique()} kart")
     reports.mkdir(exist_ok=True)
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from .buzz import BUZZ_FEATURES
 from .features import _days, _weekly, features_from_weekly
 from .scoring import CardMeta, Config, score_trough
 from .tiers import TIER_SCORE, pokemon_key, pokemon_tier, rarity_weight
@@ -25,6 +26,7 @@ FEATURES = [
     "drawdown", "range_pos_180", "slope_30", "slope_60", "slope_90", "slope_180", "vol_ratio",
     "weeks_since_low", "above_low", "sealed_slope_90", "age_months", "logp", "tier_score",
     "rarity_w", "special", "history_complete", "rv_z", "poke_pop", "set_trend_90", "set_rel",
+    *BUZZ_FEATURES,
 ]
 
 
@@ -36,7 +38,7 @@ def _robust_z(x: pd.Series) -> pd.Series:
 
 def build_panel(prices: dict[str, pd.Series], metas: dict[str, CardMeta], sealed: dict[str, pd.Series],
                 step_days: int = 14, min_price: float = 5.0, min_history_days: int = 182,
-                start: pd.Timestamp | None = None) -> pd.DataFrame:
+                start: pd.Timestamp | None = None, buzz: pd.DataFrame | None = None) -> pd.DataFrame:
     weekly = {cid: _weekly(s) for cid, s in prices.items()}
     arrays = {cid: (_days(w.index), w.to_numpy(dtype=float)) for cid, w in weekly.items() if len(w)}
     sealed_arr = {k: (_days(w.index), w.to_numpy(dtype=float))
@@ -99,6 +101,14 @@ def build_panel(prices: dict[str, pd.Series], metas: dict[str, CardMeta], sealed
     df["poke_pop"] = df["poke_pop"] - df.groupby("date")["logp"].transform("median")
     df["set_trend_90"] = df.groupby(["date", "set_id"])["slope_90"].transform("median")
     df["set_rel"] = df["logp"] - df.groupby(["date", "set_id"])["logp"].transform("median")
+    if buzz is not None and len(buzz):
+        df = df.merge(buzz, on=["date", "poke"], how="left")
+        covered = df["date"] >= buzz["date"].min() + pd.Timedelta(weeks=8)
+        for c in BUZZ_FEATURES:  # Pokémon bez wzmianek w okresie z danymi = 0, nie brak danych
+            df.loc[covered & df[c].isna(), c] = 0.0 if c != "buzz_growth" else np.log(1.0)
+    else:
+        for c in BUZZ_FEATURES:
+            df[c] = np.nan
     for h in HORIZONS:
         df[f"ex_{h}"] = df[f"fwd_{h}"] - df.groupby("date")[f"fwd_{h}"].transform("median")
     return df.reset_index(drop=True)
