@@ -23,6 +23,8 @@ from pokescout.evaluate import (FEATURES, HORIZONS, build_panel, combo_score, ev
 
 REPORTS = ROOT / "reports"
 TOP_K = 20
+UP = "model: szansa na wzrost o 50%+"
+MAIN = "ranking: szansa na +50% + model zwrotu"  # główny ranking: największy wzrost w perspektywie roku
 MIN_INVEST = 20.0  # USD – ranking i kontrola na żywo tylko dla kart, na których koszty nie zjadają zysku
 
 
@@ -61,11 +63,12 @@ def track_live(panel: pd.DataFrame, rank: pd.DataFrame, reports: Path) -> list[s
     log_f = reports / "picks_log.csv"
     log = pd.read_csv(log_f, parse_dates=["date"], dtype={"card_id": str}) if log_f.exists() else pd.DataFrame()
     today = panel.date.max()
-    if log.empty or today not in set(log.date):
-        top = rank.head(TOP_K).assign(date=today, rank=range(1, min(TOP_K, len(rank)) + 1))
-        new = top[["date", "rank", "card_id", "name", "price_now", "model_6m", "combo"]]
-        log = pd.concat([log, new], ignore_index=True) if len(log) else new
-        log.to_csv(log_f, index=False)
+    if len(log):  # ponowny przebieg w tym samym tygodniu nadpisuje jego wybory
+        log = log[log.date != today]
+    top = rank.head(TOP_K).assign(date=today, rank=range(1, min(TOP_K, len(rank)) + 1))
+    new = top[["date", "rank", "card_id", "name", "price_now", "score", "szansa_50", "model_6m", "combo"]]
+    log = pd.concat([log, new], ignore_index=True) if len(log) else new
+    log.to_csv(log_f, index=False)
     lines = ["## Kontrola na żywo", "",
              f"Każdy przebieg zapisuje top-{TOP_K} do `reports/picks_log.csv`; po 3 i 6 mies. liczymy, jak wypadły.", ""]
     rows = []
@@ -112,7 +115,8 @@ def main() -> int:
              "0,05 = użyteczny sygnał w finansach, 0,1+ = mocny). `ic_t_adj` > 2 = raczej nie przypadek. "
              f"`top_excess` = średni zwrot {TOP_K} najwyżej ocenionych kart ponad medianę rynku, "
              "`top_hit_rate` = jaki odsetek z nich pobił rynek, `top_net` = ich średni zwrot netto po kosztach "
-             "(prowizja 13% i wysyłka $1,5 w każdą stronę) – realny zysk, nie ponad rynek.", ""]
+             "(prowizja 13% i wysyłka $1,5 w każdą stronę) – realny zysk, nie ponad rynek, "
+             "`top_up50` = jaki odsetek z nich zdrożał o 50% lub więcej.", ""]
 
     combo = combo_score(panel)
     panel["combo"] = combo
@@ -125,11 +129,16 @@ def main() -> int:
         scores["reguły: moduł A (ocena bez bramek)"] = panel["rule_a"]
         scores["reguły: moduł B1 (tania vs podobne)"] = -panel["rv_z"]
         scores["ocena C: popularność + wiek + tania + dno"] = combo
-        scores["model: gradient boosting"] = walk_forward(panel, h, model="gbm")
-        scores["model: ridge na rangach"] = walk_forward(panel, h, model="ridge")
-        scores["model: gradient boosting, cel zysk netto"] = walk_forward(panel, h, model="gbm", target="exn")
+        # przy 12 mies. za mało dat, by uczyć na wynikach rocznych: modele uczone na 6 mies.
+        # (bez zaglądania w przyszłość – walk_forward bierze tylko wyniki znane w dniu decyzji)
+        mh = min(h, 6)
+        scores["model: gradient boosting"] = walk_forward(panel, mh, model="gbm")
+        scores["model: ridge na rangach"] = walk_forward(panel, mh, model="ridge")
+        scores["model: gradient boosting, cel zysk netto"] = walk_forward(panel, mh, model="gbm", target="exn")
         rk = lambda x: x.groupby(panel.date).rank(pct=True)
         scores["łącznie: model + ocena C"] = rk(scores["model: gradient boosting"]) + rk(combo)
+        scores[UP] = walk_forward(panel, mh, target="up50")
+        scores[MAIN] = rk(scores[UP]) + rk(scores["model: gradient boosting"])
         res = evaluate_scores(panel, scores, h, top_k=TOP_K)
         res.to_csv(reports / f"evaluation_{h}m.csv", index=False)
 
@@ -140,15 +149,15 @@ def main() -> int:
                   f"{len(gated)} obserwacji, średni zwrot ponad rynek "
                   f"{np.expm1(gated[y].mean()) if len(gated) else float('nan'):+.1%}.", "",
                   fmt(res), ""]
-        main_inv = ["łącznie: model + ocena C", "model: gradient boosting", "model: gradient boosting, cel zysk netto",
+        main_inv = [MAIN, UP, "łącznie: model + ocena C", "model: gradient boosting", "model: gradient boosting, cel zysk netto",
                     "ocena C: popularność + wiek + tania + dno", "reguły: moduł B1 (tania vs podobne)",
                     "reguły: moduł A (ocena bez bramek)"]
         inv = evaluate_scores(panel, {k: scores[k] for k in main_inv}, h, top_k=TOP_K, min_price=MIN_INVEST)
         lines += [f"Tylko karty od ${MIN_INVEST:.0f} (przy tańszych koszty zjadają zysk):", "", fmt(inv), ""]
-        if h <= 6:  # czy sygnał działa w obu połowach okresu (inny stan rynku)
+        if True:  # czy sygnał działa w obu połowach okresu (inny stan rynku)
             dates = sorted(known.date.unique())
             mid = dates[len(dates) // 2]
-            main = ["łącznie: model + ocena C", "ocena C: popularność + wiek + tania + dno", "reguły: moduł A (ocena bez bramek)",
+            main = [MAIN, UP, "łącznie: model + ocena C", "ocena C: popularność + wiek + tania + dno", "reguły: moduł A (ocena bez bramek)",
                     "reguły: moduł B1 (tania vs podobne)", "cecha: weeks_since_low", "cecha: −drawdown",
                     "model: gradient boosting"]
             rows = []
@@ -161,18 +170,23 @@ def main() -> int:
 
     model = fit_latest(panel, 6)
     model_net = fit_latest(panel, 6, target="exn")
+    model_up = fit_latest(panel, 6, target="up50")
     now = panel[panel.date == panel.date.max()].copy()
     now["model_6m"] = model.predict(now[FEATURES])
     now["model_net_6m"] = model_net.predict(now[FEATURES])
+    now["szansa_50"] = model_up.predict_proba(now[FEATURES])[:, 1]
     inv = now[now.price_now >= MIN_INVEST]
-    now["score"] = (inv["model_6m"].rank(pct=True) + inv["combo"].rank(pct=True)) / 2
-    cols = ["card_id", "name", "set_name", "price_now", "spread", "poke_pop", "rv_z", "weeks_since_low",
-            "buzz_share", "combo", "model_6m", "model_net_6m", "score"]
+    now["score"] = (inv["szansa_50"].rank(pct=True) + inv["model_6m"].rank(pct=True)) / 2
+    cols = ["card_id", "name", "set_name", "price_now", "score", "szansa_50", "model_6m", "combo", "spread", "poke_pop",
+            "rv_z", "weeks_since_low", "buzz_share", "model_net_6m"]
     rank = now[now.price_now >= MIN_INVEST].sort_values("score", ascending=False)[cols]
     rank.to_csv(reports / "ranking.csv", index=False)
     lines += ["## Bieżący ranking modelu (6 mies., karty od $20)", "",
-              f"Stan na {panel.date.max():%Y-%m-%d}. Kolejność wg `score` = średnia rang modelu (`model_6m`) "
-              "i oceny C (`combo`), 1 = najlepsza. `model_6m` = przewidywany log-zwrot ponad rynek w 6 mies. "
+              f"Stan na {panel.date.max():%Y-%m-%d}. Kolejność wg `score` (0–1, wyżej = lepiej) = średnia rang modelu "
+              "szukającego kart, które zdrożeją o 50%+ (`szansa_50`), i modelu zwrotu (`model_6m`); "
+              "w teście ta para najlepiej wybierała karty na rok (sekcja 12 mies.). `szansa_50` porządkuje karty, ale nie jest prawdziwym "
+              "prawdopodobieństwem – faktyczny odsetek wzrostów o 50%+ zależy głównie od stanu całego rynku. "
+              "`model_6m` = przewidywany log-zwrot ponad rynek w 6 mies. "
               "(0,20 ≈ +22%), `model_net_6m` = to samo po kosztach, "
               "`spread` = log(cena rynkowa / najniższa oferta). To lista do sprawdzenia, nie rekomendacja zakupu.", "",
               rank.drop(columns="card_id").head(25).to_markdown(index=False, floatfmt=".2f"), ""]

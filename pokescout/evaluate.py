@@ -155,11 +155,11 @@ def walk_forward(panel: pd.DataFrame, horizon: int, min_train_dates: int = 6, mo
                  target: str = "ex") -> pd.Series:
     """Ocena modelu dla każdej daty, uczonego tylko na wynikach znanych w tej dacie.
 
-    target: "ex" – log-zwrot ponad rynek, "exn" – zwrot netto po kosztach ponad rynek."""
-    from sklearn.ensemble import HistGradientBoostingRegressor
+    target: "ex" – log-zwrot ponad rynek, "exn" – zwrot netto po kosztach ponad rynek,
+            "up50" – szansa, że cena wzrośnie o co najmniej 50% (model klasyfikacyjny)."""
     from sklearn.linear_model import Ridge
 
-    y_col = f"{target}_{horizon}"
+    y_col = f"fwd_{horizon}" if target == "up50" else f"{target}_{horizon}"
     out = pd.Series(np.nan, index=panel.index)
     dates = sorted(panel["date"].unique())
     for d in dates:
@@ -170,11 +170,10 @@ def walk_forward(panel: pd.DataFrame, horizon: int, min_train_dates: int = 6, mo
         test = panel["date"] == d
         X, Xt = train[FEATURES], panel.loc[test, FEATURES]
         y = train[y_col].clip(-1.5, 1.5)  # pojedyncze skoki x5 nie mogą dominować nauki
-        if model == "gbm":
-            m = HistGradientBoostingRegressor(max_depth=3, learning_rate=0.05, max_iter=250,
-                                              min_samples_leaf=100, l2_regularization=1.0, random_state=0)
-            m.fit(X, y)
-            out[test] = m.predict(Xt)
+        if target == "up50":
+            out[test] = _gbm(target).fit(X, _target(train, horizon, target)).predict_proba(Xt)[:, 1]
+        elif model == "gbm":
+            out[test] = _gbm(target).fit(X, y).predict(Xt)
         else:  # ridge na rangach cech (odporny na wartości skrajne, braki = środek)
             def ranks(df_):
                 return df_.groupby(panel.loc[df_.index, "date"]).rank(pct=True).fillna(0.5) - 0.5
@@ -183,16 +182,25 @@ def walk_forward(panel: pd.DataFrame, horizon: int, min_train_dates: int = 6, mo
     return out
 
 
+def _gbm(target: str):
+    from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
+
+    kw = dict(max_depth=3, learning_rate=0.05, max_iter=250, min_samples_leaf=100,
+              l2_regularization=1.0, random_state=0)
+    return HistGradientBoostingClassifier(**kw) if target == "up50" else HistGradientBoostingRegressor(**kw)
+
+
+def _target(train: pd.DataFrame, horizon: int, target: str) -> pd.Series:
+    if target == "up50":
+        return (train[f"fwd_{horizon}"] >= np.log(1.5)).astype(int)
+    return train[f"{target}_{horizon}"].clip(-1.5, 1.5)
+
+
 def fit_latest(panel: pd.DataFrame, horizon: int = 6, target: str = "ex"):
     """Model uczony na wszystkich znanych wynikach – do bieżącego rankingu."""
-    from sklearn.ensemble import HistGradientBoostingRegressor
-
-    y_col = f"{target}_{horizon}"
+    y_col = f"fwd_{horizon}" if target == "up50" else f"{target}_{horizon}"
     train = panel[panel[y_col].notna()]
-    m = HistGradientBoostingRegressor(max_depth=3, learning_rate=0.05, max_iter=250,
-                                      min_samples_leaf=100, l2_regularization=1.0, random_state=0)
-    m.fit(train[FEATURES], train[y_col].clip(-1.5, 1.5))
-    return m
+    return _gbm(target).fit(train[FEATURES], _target(train, horizon, target))
 
 
 def evaluate_scores(panel: pd.DataFrame, scores: dict[str, pd.Series], horizon: int,
@@ -201,12 +209,12 @@ def evaluate_scores(panel: pd.DataFrame, scores: dict[str, pd.Series], horizon: 
 
     Daty decyzji co 2 tygodnie przy horyzoncie 6 mies. dają nakładające się okresy, więc
     zwykły t-stat jest zawyżony; ic_t_adj koryguje go do liczby niezależnych okresów."""
-    y_col, n_col = f"ex_{horizon}", f"net_{horizon}"
+    y_col, n_col, f_col = f"ex_{horizon}", f"net_{horizon}", f"fwd_{horizon}"
     rows = []
     for name, s in scores.items():
-        df = panel.assign(_s=s)[["date", "_s", y_col, n_col, "price_now"]].dropna()
+        df = panel.assign(_s=s)[["date", "_s", y_col, n_col, f_col, "price_now"]].dropna()
         df = df[df.price_now >= min_price]
-        ics, tops, hits, nets = [], [], [], []
+        ics, tops, hits, nets, ups = [], [], [], [], []
         for _, g in df.groupby("date"):
             if len(g) < max(30, top_k):
                 continue
@@ -215,6 +223,7 @@ def evaluate_scores(panel: pd.DataFrame, scores: dict[str, pd.Series], horizon: 
             tops.append(t[y_col].mean())
             hits.append((t[y_col] > 0).mean())
             nets.append(t[n_col].mean())
+            ups.append((t[f_col] >= np.log(1.5)).mean())
         if not ics:
             continue
         ics = np.array(ics)
@@ -224,5 +233,6 @@ def evaluate_scores(panel: pd.DataFrame, scores: dict[str, pd.Series], horizon: 
                       * np.sqrt(min(1.0, step_days / (horizon * 30.44)))) if len(ics) > 1 else np.nan,
             top_excess=np.expm1(np.mean(tops)), top_hit_rate=np.mean(hits),
             top_net=np.mean(nets),  # średni zwrot netto (po kosztach) z top-K, nie ponad rynek
+            top_up50=np.mean(ups),  # odsetek kart z top-K, których cena wzrosła o 50%+
         ))
     return pd.DataFrame(rows).sort_values("ic", ascending=False).reset_index(drop=True)
