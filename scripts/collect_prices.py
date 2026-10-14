@@ -39,16 +39,23 @@ if os.getenv("POKEMONTCG_API_KEY"):
     session.headers["X-Api-Key"] = os.environ["POKEMONTCG_API_KEY"]
 
 
-def get(path: str, params: dict | None = None, tries: int = 5) -> dict:
+def get(path: str, params: dict | None = None, tries: int = 6) -> dict:
+    last = ""
     for i in range(tries):
-        r = session.get(f"{API}/{path}", params=params, timeout=60)
+        try:
+            r = session.get(f"{API}/{path}", params=params, timeout=90)
+        except requests.RequestException as e:  # timeouty zdarzają się w tym API często
+            last = type(e).__name__
+            time.sleep(10 * (i + 1))
+            continue
         if r.status_code == 200:
             return r.json()
+        last = f"HTTP {r.status_code}"
         if r.status_code in (429, 500, 502, 503, 504):
-            time.sleep(5 * (i + 1))
+            time.sleep(10 * (i + 1))
             continue
         r.raise_for_status()
-    raise RuntimeError(f"Nie udało się pobrać {path} {params}")
+    raise RuntimeError(f"Nie udało się pobrać {path} {params} ({last})")
 
 
 def is_chase(card: dict, printed_total: int) -> bool:
@@ -77,11 +84,25 @@ def main() -> int:
     sets = [s for s in sets if s.get("releaseDate", "") >= MIN_RELEASE]
     print(f"Sety od {MIN_RELEASE}: {len(sets)}")
 
-    cards_rows, price_rows = [], []
+    cards_rows, price_rows, failed = [], [], []
     for s in sets:
+        try:
+            fetch_set(s, cards_rows, price_rows)
+        except RuntimeError as e:
+            failed.append(s["id"])
+            print(f"::warning title=collect_prices::pominięto set {s['id']}: {e}")
+        time.sleep(0.5)
+    print(f"Sety pobrane: {len(sets) - len(failed)}/{len(sets)}; pominięte: {failed}")
+    if len(failed) > len(sets) / 2:
+        print("Za dużo nieudanych setów", file=sys.stderr)
+        return 1
+    return save(today, cards_rows, price_rows)
+
+
+def fetch_set(s: dict, cards_rows: list, price_rows: list) -> None:
         page = 1
         while True:
-            res = get("cards", {"q": f"set.id:{s['id']}", "pageSize": 250, "page": page,
+            res = get("cards", {"q": f"set.id:{s['id']}", "pageSize": 100, "page": page,
                                 "select": "id,name,number,rarity,artist,tcgplayer,cardmarket"})
             for c in res["data"]:
                 if not is_chase(c, s.get("printedTotal") or 0):
@@ -101,11 +122,12 @@ def main() -> int:
                     cm_trend_eur=cmp.get("trendPrice"), cm_avg30_eur=cmp.get("avg30"),
                     cm_updated=cm.get("updatedAt"),
                 ))
-            if page * 250 >= res.get("totalCount", 0):
+            if page * 100 >= res.get("totalCount", 0):
                 break
             page += 1
-        time.sleep(0.3)
 
+
+def save(today, cards_rows: list, price_rows: list) -> int:
     if not price_rows:
         print("Brak danych – coś poszło nie tak", file=sys.stderr)
         return 1
