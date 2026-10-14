@@ -1,0 +1,21 @@
+name: Diagnoza Arctic Shift (tymczasowe)
+
+on:
+  push:
+    branches: [tcgcsv-history]
+    paths: [".github/workflows/debug-reddit.yml"]
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Czas i rozmiar odpowiedzi
+        run: |
+          B=https://arctic-shift.photon-reddit.com/api/posts/search
+          for q in "after=1704067200&sort=asc&limit=auto" "after=2024-01-01&sort=asc&limit=100" "after=2024-01-01&before=2024-01-08&limit=100" "after=2026-10-01&sort=asc&limit=auto"; do
+            r=$(curl -sS -A "PokeScout/0.2" -o /tmp/b -w "%{http_code} %{time_total}s %{size_download}B" --max-time 120 "$B?subreddit=PokemonTCG&fields=id,created_utc&$q" || echo fail)
+            n=$(python3 -c "import json;d=json.load(open('/tmp/b'))['data'];print(len(d), d[0]['created_utc'] if d else '-', d[-1]['created_utc'] if d else '-')" 2>&1 | head -c 200)
+            echo "::notice title=$q::$r | n first last: $n"
+          done
+          r=$(curl -sS -o /tmp/s -w "%{http_code}" https://status.arctic-shift.photon-reddit.com || true); echo "::notice title=status::$r $(head -c 300 /tmp/s | tr -dc '[:print:]')"
