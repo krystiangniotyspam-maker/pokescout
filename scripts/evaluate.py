@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT))
 from pokescout.buzz import buzz_features, load_reddit  # noqa: E402
 from pokescout.data import load_repo_history  # noqa: E402
 from pokescout.tiers import pokemon_key  # noqa: E402
+from pokescout import sealed  # noqa: E402
 from pokescout.tcgcsv import CHASE_RARITIES  # noqa: E402
 from pokescout.evaluate import (FEATURES, HORIZONS, build_panel, combo_score, evaluate_scores,  # noqa: E402
                                 fit_latest, walk_forward)
@@ -55,6 +56,21 @@ def market_section(panel: pd.DataFrame) -> list[str]:
             f"Teraz ({idx.index[-1]:%Y-%m-%d}): trend 90 dni {now.trend_90:+.1%}/mies. "
             f"(wyżej niż w {pct('trend_90'):.0%} historii), trend 180 dni {now.trend_180:+.1%}/mies. "
             f"(wyżej niż w {pct('trend_180'):.0%} historii).", ""]
+
+
+def sealed_section(data_dir: str, reports: Path) -> list[str]:
+    prices, cat = sealed.load_sealed_weekly(data_dir)
+    if prices.empty:
+        return []
+    rank = sealed.add_cardmarket(sealed.ranking(prices, cat, min_price=MIN_INVEST), data_dir)
+    rank.to_csv(reports / "sealed_ranking.csv", index=False)
+    return ["## Produkty zamknięte (booster box, ETB, bundle)", "",
+            "Ocena = ranga typu produktu (ETB i booster bundle wyżej) + bliskość wieku 1,5 roku od premiery "
+            "+ cena (droższe wyżej). Test: średni zwrot 10 najwyżej ocenionych produktów vs wszystkie, bez kosztów.", "",
+            sealed.evaluate(prices, cat).to_markdown(index=False), "",
+            f"Ranking na {prices.index[-1]:%Y-%m-%d} (produkty od ${MIN_INVEST:.0f}, pełna lista w "
+            "`reports/sealed_ranking.csv`):", "",
+            rank.drop(columns="product_id").head(15).to_markdown(index=False, floatfmt=".2f"), ""]
 
 
 def track_live(panel: pd.DataFrame, rank: pd.DataFrame, reports: Path) -> list[str]:
@@ -210,6 +226,7 @@ def main() -> int:
               "`spread` = log(cena rynkowa / najniższa oferta). To lista do sprawdzenia, nie rekomendacja zakupu.", "",
               rank.drop(columns="card_id").head(25).to_markdown(index=False, floatfmt=".2f"), ""]
     lines += market_section(panel)
+    lines += sealed_section(a.data, reports)
     lines += track_live(panel, rank, reports)
     (reports / "evaluation.md").write_text("\n".join(lines))
     print("\n".join(lines))
