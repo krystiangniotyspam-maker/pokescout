@@ -39,7 +39,7 @@ class Config:
     # Bez tego algorytm łapie karty, które tanieją powoli, ale bez końca (pułapka Celebrations).
     min_weeks_since_low: int = 6
     min_above_low: float = 0.05
-    min_price_eur: float = 8.0
+    min_price: float = 8.0          # w walucie danych (TCGplayer: USD)
     # --- wagi składników oceny A
     w_quality: float = 0.25
     w_depth: float = 0.20
@@ -62,6 +62,7 @@ class CardMeta:
     set_type: str = "main"              # "main" | "special" | "promo"
     reprint_announced: bool = False     # ręczna flaga: zapowiedziany dodruk
     buzz: float | None = None           # 0–1 z analizy forów/YouTube; None = brak danych
+    set_name: str = ""
 
 
 @dataclass
@@ -99,7 +100,7 @@ def _age_fit(age: float, set_type: str) -> float:
 
 def score_trough(f: CardFeatures, meta: CardMeta, cfg: Config = Config()) -> Result:
     tier = pokemon_tier(meta.name)
-    rw = rarity_weight(meta.rarity)
+    rw = rarity_weight(meta.rarity, meta.name)
     reasons: list[str] = []
     gates: list[str] = []
 
@@ -119,7 +120,7 @@ def score_trough(f: CardFeatures, meta: CardMeta, cfg: Config = Config()) -> Res
     if f.weeks_since_low < cfg.min_weeks_since_low or f.above_low < cfg.min_above_low:
         gates.append(f"brak potwierdzonego dna (minimum {f.weeks_since_low} tyg. temu, "
                      f"cena {f.above_low:+.0%} nad nim)")
-    if f.price_now < cfg.min_price_eur:
+    if f.price_now < cfg.min_price:
         gates.append("za tania (mała płynność, wysyłka zjada zysk)")
     if meta.reprint_announced:
         gates.append("zapowiedziany dodruk")
@@ -205,7 +206,7 @@ def score_relative_value(
                 continue
             if not np.isnan(r.slope_60) and r.slope_60 < cfg.max_falling_slope:
                 continue
-            quality = 0.6 * TIER_SCORE[r.tier] + 0.4 * rarity_weight(r.rarity)
+            quality = 0.6 * TIER_SCORE[r.tier] + 0.4 * rarity_weight(r.rarity, r["name"])
             cheap = _clip01(-z / 2.5)
             stab = 0.5 if np.isnan(r.slope_60) else _clip01((r.slope_60 + 0.03) / 0.06)
             buzz = 0.5 if r.m.buzz is None else r.m.buzz

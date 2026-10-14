@@ -68,41 +68,77 @@ Bez tej reguły algorytm wybierał głównie karty z powoli tanieącego setu spe
 
 ## 4. Dane
 
-Format wejściowy jest niezależny od źródła (`data.py`): `prices.csv` (card_id, date, price), `cards.csv` (card_id, name, set_id, rarity, release_date, set_type, reprint_announced, buzz), `sealed.csv` (set_id, date, price).
+Źródło: **[tcgcsv.com](https://tcgcsv.com)** – codzienne kopie cen TCGplayer, bez klucza API,
+ok. 2 zapytania na set (kilka minut na cały przebieg). Daje też ceny **zamkniętych produktów**
+(booster box, bundle, ETB), więc sygnał „sealed drożeje” działa na prawdziwych danych,
+oraz **historię od 08.02.2024**: autor tcgcsv w 10.2026 tymczasowo
+wyłączył swoje archiwum, więc import (`scripts/backfill_history.py`) bierze je z publicznej kopii
+[landonrroy/pokefolio-data](https://github.com/landonrroy/pokefolio-data) (dzienne pliki 08.02.2024–15.09.2026; od 14.10.2026 dane zbiera nasz codzienny przebieg).
 
-| Źródło | Uwagi |
+| Plik | Zawartość |
 |---|---|
-| pokemontcg.io (darmowe) | Katalog + ceny TCGplayer aktualne. **Ceny Cardmarketu w API nieaktualizowane od 11.2025** (sprawdzone na Magikarp 203) – dla Europy nie polegać |
-| PokemonPriceTracker (100 zapytań/dzień za darmo) | Historia dzienna Cardmarket/TCGplayer/eBay – do sprawdzenia głębokość historii |
-| PriceCharting (płatne) | Długa historia, karty z oceną |
-| Własne zrzuty | Od dziś codziennie zapisywać ceny – każdy dzień to dzień historii więcej |
+| `data/catalog/sets.csv` | sety od 2019 r.: group_id, nazwa, premiera, typ (main/special/promo) |
+| `data/catalog/cards.csv` | śledzone karty (rzadkość IR/SIR/Ultra/Secret/Hyper… albo cena ≥ $10); ręczne kolumny `reprint_announced`, `buzz` są zachowywane |
+| `data/catalog/sealed.csv` | zamknięte produkty setu |
+| `data/prices/RRRR/MM/DD.csv.gz` | ceny z dnia: product_id, sub_type, market, low, mid (USD) |
+
+Uwaga: dla setów sprzed 02.2024 „szczyt po premierze” to tylko maksimum od początku danych
+(cecha `history_complete` mówi modelowi, kiedy tak jest). Ceny Cardmarketu nie są dostępne;
+pokemontcg.io (poprzednie źródło) często nie odpowiadało i miało nieaktualne ceny Cardmarketu.
 
 ## 5. Uruchomienie
 
 ```bash
-pip install pandas numpy
-python demo.py                                   # demo na danych syntetycznych
-python run.py --prices prices.csv --cards cards.csv --sealed sealed.csv --as-of 2026-10-14
+pip install -r requirements.txt
+python demo.py                          # demo na danych syntetycznych
+python scripts/collect_prices.py        # dzisiejsze ceny + katalog
+python scripts/backfill_history.py --start 2024-02-08 --every 7   # historia z archiwum
+python scripts/evaluate.py              # test przewidywań → reports/evaluation.md, reports/ranking.csv
 ```
 
-## 6. Następne kroki
+## 6. Test przewidywań (`scripts/evaluate.py`)
 
-1. Pobrać prawdziwą historię dla ok. 300–500 kart IR/SIR/alt art z setów 2020–2024 i uruchomić `backtest.py`.
-2. Skalibrować progi i wagi na tych danych (uwaga na przeuczenie – mało „zwycięzców”, testować na latach, których nie użyto do kalibracji).
-3. Skalibrować listę popularności Pokémonów danymi (mediana cen kart danego Pokémona).
-4. Dodać `buzz` z Reddita/YouTube (Gemini API) – najpierw sprawdzić w teście, czy w ogóle poprawia wyniki.
-5. Codzienny przebieg (GitHub Actions) + raport na Discord.
+Co 2 tygodnie (data decyzji) liczymy cechy każdej karty **tylko z danych do tej daty** i sprawdzamy
+zwrot po 3, 6 i 12 miesiącach **ponad medianę rynku** (żeby oceniać wybór kart, a nie to, czy cały rynek rósł).
 
-## 7. Automat w chmurze (GitHub Actions)
+Porównujemy:
+- obecne reguły (moduł A bez bramek, moduł B1),
+- każdą cechę osobno (który sygnał w ogóle coś przewiduje),
+- **model uczony walk-forward** (gradient boosting i ridge): w dniu decyzji uczy się tylko na przykładach,
+  których wynik był już wtedy znany.
 
-Workflow `.github/workflows/daily.yml` codziennie ok. 7:17:
-1. `scripts/collect_prices.py` – zrzut cen kart IR/SIR/secret itd. z setów od 2019 r. (pokemontcg.io) do `data/prices/RRRR/MM/DD.csv`,
-2. commit danych do repo (historia rośnie z każdym dniem),
-3. `scripts/report.py --send` – ranking i wysyłka na Discord.
+Miary: **IC** (korelacja rang oceny ze zwrotem, liczona w każdej dacie osobno), `ic_t_adj`
+(t-stat skorygowany o nakładające się okresy), zwrot top-20 ponad rynek i odsetek trafień.
 
-Sekrety (Settings → Secrets and variables → Actions):
-- `DISCORD_WEBHOOK_RAPORT` – adres webhooka kanału z raportem,
-- `POKEMONTCG_API_KEY` – opcjonalnie (bez klucza też działa).
+Cechy przekrojowe dodane do modelu: karta vs podobne karty (`rv_z`), popularność Pokémona z danych
+(`poke_pop` – mediana cen jego innych kart IR+), trend całego setu (`set_trend_90`), karta vs set (`set_rel`).
 
-Ręczne uruchomienie: zakładka **Actions → Codzienne ceny i raport → Run workflow**.
-Oceny ruszą po ok. 8 tygodniach zbierania (albo wcześniej po wczytaniu historii z PokemonPriceTracker).
+### Wyniki na prawdziwej historii (02.2024 – 10.2026)
+
+Pełny raport: [`reports/evaluation.md`](reports/evaluation.md). Najważniejsze:
+
+- **Moduł A („dołek po premierze”) prawie nic nie przewiduje**: IC ≈ 0,04, w drugiej połowie okresu ≈ 0.
+  Karty głęboko pod szczytem dalej radziły sobie gorzej niż rynek (cecha `drawdown` ma ujemne IC w obu połowach).
+- **Działa**: popularność Pokémona liczona z cen (`poke_pop`), starszy set, karta tańsza niż podobne
+  (moduł B1 – najbardziej stabilny sygnał) i dno utrzymane od tygodni (`weeks_since_low`).
+- **Model uczony (gradient boosting, walk-forward)**: od kiedy ma ok. rok danych do nauki (od 07.2025),
+  20 najwyżej ocenionych kart biło rynek o ok. +10% w 3 i 6 mies., 61–68% z nich było lepszych od mediany.
+- **Ocena C** (suma rang: popularność + wiek + tania vs podobne + dno) dawała +51% w boomie 2024/25,
+  ale tylko ok. +9% później; cechy do niej wybrano na tych samych danych, więc wynik jest optymistyczny.
+
+Zastrzeżenia: tylko ok. 2 lata danych i jeden cykl rynku (wzrosty, potem korekta), ceny TCGplayer w USD
+(nie Cardmarket), a przy kartach za kilka dolarów prowizje i wysyłka zjadają zysk.
+
+## 7. Następne kroki
+
+1. Ranking z modelu jako główny wynik (z ponownym uczeniem co tydzień), moduł A do przebudowy albo usunięcia.
+2. Śledzić wyniki na nowych danych (prawdziwy test poza próbą).
+3. `buzz` z Reddita/YouTube – dodać tylko, jeśli test pokaże poprawę.
+4. Raport na Discord (na razie wyłączony w workflow).
+
+## 8. Automat w chmurze (GitHub Actions)
+
+- `.github/workflows/daily.yml` – codziennie 5:17 UTC: `scripts/collect_prices.py` i commit danych do repo.
+- `.github/workflows/backfill.yml` – ręcznie (**Actions → Import historii cen → Run workflow**): import historii za wybrany okres (domyślnie od 08.02.2024 co 7 dni). Dni, które już są, pomija.
+
+Zapisy do repo idą po kolei (`concurrency: data-write`), więc przebiegi nie nadpisują sobie danych.
