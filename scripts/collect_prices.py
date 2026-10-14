@@ -1,157 +1,118 @@
-"""Codzienny zrzut cen „łakomych” kart z pokemontcg.io.
+"""Codzienny zrzut cen z tcgcsv.com (kopie cen TCGplayer, bez klucza API).
 
 Zapisuje:
-  data/cards.csv                        – katalog kart (nadpisywany codziennie)
-  data/prices/RRRR/MM/DD.csv            – ceny z danego dnia (jeden mały plik na dzień)
+  data/catalog/sets.csv                 – sety od 2019 r. (group_id, nazwa, premiera, typ setu)
+  data/catalog/cards.csv                – śledzone karty (rzadkie albo drogie); ręczne kolumny
+                                          reprint_announced i buzz są zachowywane
+  data/catalog/sealed.csv               – zamknięte produkty (booster box, bundle, ETB, paczka)
+  data/prices/RRRR/MM/DD.csv.gz         – ceny z danego dnia: product_id, sub_type, market, low, mid
 
-Ceny:
-  tcg_market_usd – TCGplayer, cena rynkowa (aktualizowana codziennie)
-  cm_trend_eur   – Cardmarket trend z pokemontcg.io (UWAGA: w 10.2026 nieaktualizowane od 11.2025,
-                   zapisujemy razem z datą aktualizacji, żeby było widać, kiedy znów ruszy)
-
-Klucz API opcjonalny (zmienna POKEMONTCG_API_KEY) – bez klucza limit to ok. 1000 zapytań/dzień,
-a skrypt potrzebuje ok. 100–150.
+Cały przebieg to ok. 2 zapytania na set (ok. 300–400 zapytań, kilka minut).
 """
 from __future__ import annotations
 
 import datetime as dt
-import os
 import sys
-import time
 from pathlib import Path
 
 import pandas as pd
-import requests
 
-API = "https://api.pokemontcg.io/v2"
-MIN_RELEASE = "2019/01/01"
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
+
+from pokescout.data import guess_set_type  # noqa: E402
+from pokescout.tcgcsv import Client, ext, is_tracked_card, sealed_kind  # noqa: E402
+
+MIN_RELEASE = "2019-01-01"
 DATA = ROOT / "data"
-
-KEEP_RARITIES = {
-    "illustration rare", "special illustration rare", "hyper rare", "ultra rare",
-    "rare secret", "rare rainbow", "rare ultra", "trainer gallery rare holo",
-    "shiny rare", "shiny ultra rare", "rare shiny gx", "rare shining", "double rare",
-}
-
-session = requests.Session()
-if os.getenv("POKEMONTCG_API_KEY"):
-    session.headers["X-Api-Key"] = os.environ["POKEMONTCG_API_KEY"]
+CATALOG = DATA / "catalog"
+MANUAL_COLS = ("reprint_announced", "buzz")
 
 
-def get(path: str, params: dict | None = None, tries: int = 6) -> dict:
-    last = ""
-    for i in range(tries):
+def price_rows(prices: list[dict]) -> pd.DataFrame:
+    df = pd.DataFrame(prices)
+    if df.empty:
+        return pd.DataFrame(columns=["product_id", "sub_type", "market", "low", "mid"])
+    df = df.rename(columns={"productId": "product_id", "subTypeName": "sub_type",
+                            "marketPrice": "market", "lowPrice": "low", "midPrice": "mid"})
+    return df[["product_id", "sub_type", "market", "low", "mid"]]
+
+
+def collect(client: Client, today: dt.date) -> int:
+    groups = [g for g in client.groups() if (g.get("publishedOn") or "")[:10] >= MIN_RELEASE]
+    print(f"Sety od {MIN_RELEASE}: {len(groups)}")
+
+    sets, cards, sealed, prices, failed = [], [], [], [], []
+    for g in groups:
+        gid, gname = g["groupId"], g["name"]
+        release = g["publishedOn"][:10]
         try:
-            r = session.get(f"{API}/{path}", params=params, timeout=90)
-        except requests.RequestException as e:  # timeouty zdarzają się w tym API często
-            last = type(e).__name__
-            time.sleep(10 * (i + 1))
-            continue
-        if r.status_code == 200:
-            return r.json()
-        last = f"HTTP {r.status_code}"
-        if r.status_code in (429, 500, 502, 503, 504):
-            time.sleep(10 * (i + 1))
-            continue
-        r.raise_for_status()
-    raise RuntimeError(f"Nie udało się pobrać {path} {params} ({last})")
-
-
-def is_chase(card: dict, printed_total: int) -> bool:
-    rarity = (card.get("rarity") or "").lower()
-    if rarity in KEEP_RARITIES:
-        return True
-    num = card.get("number", "")
-    return num.isdigit() and printed_total and int(num) > printed_total
-
-
-def tcg_market(card: dict) -> tuple[float | None, float | None]:
-    prices = (card.get("tcgplayer") or {}).get("prices") or {}
-    for variant in ("holofoil", "normal", "reverseHolofoil", "1stEditionHolofoil"):
-        if variant in prices:
-            p = prices[variant]
-            return p.get("market"), p.get("low")
-    if prices:
-        p = next(iter(prices.values()))
-        return p.get("market"), p.get("low")
-    return None, None
-
-
-def main() -> int:
-    today = dt.date.today()
-    sets = get("sets", {"pageSize": 250, "orderBy": "releaseDate"})["data"]
-    sets = [s for s in sets if s.get("releaseDate", "") >= MIN_RELEASE]
-    print(f"Sety od {MIN_RELEASE}: {len(sets)}")
-
-    cards_rows, price_rows, failed = [], [], []
-    for s in sets:
-        try:
-            fetch_set(s, cards_rows, price_rows)
+            products = client.products(gid)
+            pr = price_rows(client.prices(gid))
         except RuntimeError as e:
-            failed.append(s["id"])
-            print(f"::warning title=collect_prices::pominięto set {s['id']}: {e}")
-        time.sleep(0.5)
-    print(f"Sety pobrane: {len(sets) - len(failed)}/{len(sets)}; pominięte: {failed}")
-    if len(failed) > len(sets) / 2:
-        print("Za dużo nieudanych setów", file=sys.stderr)
+            failed.append(gname)
+            print(f"::warning title=collect_prices::pominięto set {gname}: {e}")
+            continue
+        set_type = guess_set_type(gname)
+        sets.append(dict(group_id=gid, set_name=gname, abbreviation=g.get("abbreviation"),
+                         release_date=release, set_type=set_type,
+                         supplemental=bool(g.get("isSupplemental"))))
+        max_market = pr.groupby("product_id")["market"].max()
+        keep: set[int] = set()
+        for p in products:
+            pid, e = p["productId"], ext(p)
+            if "Number" in e or "Rarity" in e:
+                if is_tracked_card(e.get("Rarity"), max_market.get(pid)):
+                    keep.add(pid)
+                    cards.append(dict(product_id=pid, name=p.get("name"), number=e.get("Number"),
+                                      rarity=e.get("Rarity"), group_id=gid, set_name=gname,
+                                      release_date=release, set_type=set_type))
+            else:
+                kind = sealed_kind(p.get("name"))
+                if kind:
+                    keep.add(pid)
+                    sealed.append(dict(product_id=pid, name=p.get("name"), kind=kind,
+                                       group_id=gid, set_name=gname, release_date=release))
+        prices.append(pr[pr.product_id.isin(keep)])
+
+    print(f"Sety pobrane: {len(sets)}/{len(groups)}; pominięte: {failed}")
+    if not sets or len(failed) > len(groups) / 4:
+        print("::error title=collect_prices::Za dużo nieudanych setów")
         return 1
-    return save(today, cards_rows, price_rows)
-
-
-def fetch_set(s: dict, cards_rows: list, price_rows: list) -> None:
-        page = 1
-        while True:
-            res = get("cards", {"q": f"set.id:{s['id']}", "pageSize": 100, "page": page,
-                                "select": "id,name,number,rarity,artist,tcgplayer,cardmarket"})
-            for c in res["data"]:
-                if not is_chase(c, s.get("printedTotal") or 0):
-                    continue
-                market, low = tcg_market(c)
-                cm = c.get("cardmarket") or {}
-                cmp = cm.get("prices") or {}
-                cards_rows.append(dict(
-                    card_id=c["id"], name=c["name"], number=c.get("number"),
-                    set_id=s["id"], set_name=s["name"], series=s.get("series"),
-                    rarity=c.get("rarity"), artist=c.get("artist"),
-                    release_date=s["releaseDate"].replace("/", "-"),
-                ))
-                price_rows.append(dict(
-                    card_id=c["id"],
-                    tcg_market_usd=market, tcg_low_usd=low,
-                    cm_trend_eur=cmp.get("trendPrice"), cm_avg30_eur=cmp.get("avg30"),
-                    cm_updated=cm.get("updatedAt"),
-                ))
-            if page * 100 >= res.get("totalCount", 0):
-                break
-            page += 1
-
-
-def save(today, cards_rows: list, price_rows: list) -> int:
-    if not price_rows:
-        print("Brak danych – coś poszło nie tak", file=sys.stderr)
-        return 1
-
-    DATA.mkdir(exist_ok=True)
-    cards = pd.DataFrame(cards_rows).drop_duplicates("card_id")
-    old = DATA / "cards.csv"
-    if old.exists():  # zachowaj ręczne kolumny (set_type, reprint_announced, buzz)
-        prev = pd.read_csv(old)
-        manual = [c for c in ("card_id", "set_type", "reprint_announced", "buzz") if c in prev.columns]
-        if len(manual) > 1:
-            cards = cards.merge(prev[manual], on="card_id", how="left")
-    cards.to_csv(old, index=False)
-
-    out = DATA / "prices" / f"{today:%Y}" / f"{today:%m}" / f"{today:%d}.csv"
-    out.parent.mkdir(parents=True, exist_ok=True)
-    pd.DataFrame(price_rows).drop_duplicates("card_id").to_csv(out, index=False)
-    print(f"Zapisano {len(price_rows)} kart → {out.relative_to(ROOT)}")
+    save_catalog(pd.DataFrame(sets), pd.DataFrame(cards), pd.DataFrame(sealed))
+    out = save_prices(today, pd.concat(prices))
+    print(f"Zapisano {len(cards)} kart i {len(sealed)} produktów sealed → {out}")
     return 0
+
+
+def save_catalog(sets: pd.DataFrame, cards: pd.DataFrame, sealed: pd.DataFrame) -> None:
+    CATALOG.mkdir(parents=True, exist_ok=True)
+    cards = cards.drop_duplicates("product_id")
+    old = CATALOG / "cards.csv"
+    if old.exists():  # zachowaj ręczne kolumny
+        prev = pd.read_csv(old)
+        manual = [c for c in MANUAL_COLS if c in prev.columns]
+        if manual:
+            cards = cards.merge(prev[["product_id", *manual]], on="product_id", how="left")
+    for c in MANUAL_COLS:
+        if c not in cards.columns:
+            cards[c] = pd.NA
+    sets.to_csv(CATALOG / "sets.csv", index=False)
+    cards.to_csv(old, index=False)
+    sealed.drop_duplicates("product_id").to_csv(CATALOG / "sealed.csv", index=False)
+
+
+def save_prices(day: dt.date, prices: pd.DataFrame) -> Path:
+    out = DATA / "prices" / f"{day:%Y}" / f"{day:%m}" / f"{day:%d}.csv.gz"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    prices = prices.dropna(subset=["market", "low", "mid"], how="all")
+    prices.sort_values(["product_id", "sub_type"]).to_csv(out, index=False, float_format="%.2f")
+    return out
 
 
 if __name__ == "__main__":
     try:
-        sys.exit(main())
+        sys.exit(collect(Client(), dt.date.today()))
     except Exception as e:  # komunikat jako adnotacja GitHub Actions – widać go bez otwierania logu
         import traceback
         tb = traceback.format_exc().strip().splitlines()

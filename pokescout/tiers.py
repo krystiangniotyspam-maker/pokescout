@@ -47,7 +47,20 @@ RARITY_WEIGHT = {
     "shiny ultra rare": 0.6,
     "rare shiny gx": 0.6,
     "rare shining": 0.7,
+    # nazwy rzadkości z TCGplayer (tcgcsv.com)
+    "mega hyper rare": 0.8,
+    "secret rare": 0.6,            # złote/tęczowe; alt arty rozpoznajemy po nazwie (niżej)
+    "shiny holo rare": 0.4,
+    "radiant rare": 0.4,
+    "amazing rare": 0.4,
+    "prism rare": 0.4,
+    "black white rare": 0.8,
+    "ace spec rare": 0.2,
+    "holo rare": 0.15,
 }
+
+# Alt arty z ery Sword & Shield TCGplayer oznacza jako „Secret/Ultra Rare” z dopiskiem w nazwie
+ALT_ART_HINTS = ("alternate art", "alternate full art")
 
 
 def pokemon_tier(name: str) -> int:
@@ -72,5 +85,21 @@ def pokemon_tier(name: str) -> int:
     return best
 
 
-def rarity_weight(rarity: str) -> float:
-    return RARITY_WEIGHT.get((rarity or "").strip().lower(), 0.1)
+def rarity_weight(rarity: str, name: str = "") -> float:
+    w = RARITY_WEIGHT.get((rarity or "").strip().lower(), 0.1)
+    if any(h in (name or "").lower() for h in ALT_ART_HINTS):
+        w = max(w, 1.0)
+    return w
+
+
+_SUFFIXES = {"ex", "v", "vmax", "vstar", "gx", "v-union", "break", "lv.x", "prime", "star", "δ",
+             "radiant", "mega", "m", "shining", "dark", "light", "galarian", "alolan", "hisuian",
+             "paldean", "team", "rocket's", "&"}
+
+
+def pokemon_key(name: str) -> str:
+    """Rdzeń nazwy do grupowania kart tego samego Pokémona, np.
+    'Umbreon VMAX (Alternate Art Secret)' -> 'umbreon', 'Magikarp - 203/193' -> 'magikarp'."""
+    n = (name or "").lower().split("(")[0].split(" - ")[0].replace("team rocket's ", " ").replace("'s ", " ")
+    tokens = [t for t in n.replace("-ex", " ex").split() if t not in _SUFFIXES]
+    return tokens[0] if tokens else n.strip()

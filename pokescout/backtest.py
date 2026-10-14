@@ -46,7 +46,7 @@ def run_backtest(
                 continue
             fwd = p_exit / f.price_now - 1
             base_ok = (pokemon_tier(m.name) <= cfg.max_tier
-                       and rarity_weight(m.rarity) >= cfg.min_rarity_weight
+                       and rarity_weight(m.rarity, m.name) >= cfg.min_rarity_weight
                        and f.age_months >= 3)
             scored.append(dict(date=d, card_id=cid, name=m.name, score=r.score,
                                passed=r.passed_gates, fwd=fwd, base=base_ok))
