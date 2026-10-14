@@ -1,0 +1,98 @@
+group_id,set_name,abbreviation,release_date,set_type,supplemental
+24831,ME06: Delta Reign,DLR,2026-11-06,main,False
+24722,ME: 30th Celebration,30C,2026-09-16,special,False
+24837,ME: 30th Celebration Classic Collection,30C,2026-09-16,special,True
+24688,ME05: Pitch Black,PBL,2026-07-17,main,False
+24655,ME04: Chaos Rising,CRI,2026-05-22,main,False
+24584,First Partner Collection 2026,,2026-03-30,promo,False
+24587,ME03: Perfect Order,POR,2026-03-27,main,False
+24541,ME: Ascended Heroes,ASC,2026-01-30,special,False
+24529,Player Placement Trainer Promos,,2026-01-02,promo,False
+24448,ME02: Phantasmal Flames,PFL,2025-11-14,main,False
+24451,ME: Mega Evolution Promo,MEP,2025-09-26,promo,False
+24380,ME01: Mega Evolution,MEG,2025-09-26,main,False
+24461,MEE: Mega Evolution Energies,MEE,2025-09-26,main,False
+24325,SV: Black Bolt,BLK,2025-07-18,special,False
+24326,SV: White Flare,WHT,2025-07-18,special,False
+24269,SV10: Destined Rivals,DRI,2025-05-30,main,False
+24073,SV09: Journey Together,JTG,2025-03-28,main,False
+24163,McDonald's Promos 2024,M24,2025-01-21,promo,False
+23821,SV: Prismatic Evolutions,PRE,2025-01-17,special,False
+23651,SV08: Surging Sparks,SSP,2024-11-08,main,False
+23537,SV07: Stellar Crown,SCR,2024-09-13,main,False
+23561,Trick or Trade BOOster Bundle 2024,TTBB24,2024-08-30,promo,False
+23529,SV: Shrouded Fable,SFA,2024-08-02,special,False
+23520,Battle Academy 2024,BA24,2024-06-21,promo,False
+23473,SV06: Twilight Masquerade,TWM,2024-05-24,main,False
+23381,SV05: Temporal Forces,TEF,2024-03-22,main,False
+23353,SV: Paldean Fates,PAF,2024-01-26,special,False
+23323,Trading Card Game Classic,CL,2023-11-17,main,False
+23286,SV04: Paradox Rift,PAR,2023-11-03,main,False
+23330,My First Battle,,2023-09-29,main,False
+23237,SV: Scarlet & Violet 151,MEW,2023-09-22,special,False
+23306,McDonald's Promos 2023,M23,2023-09-12,promo,False
+23266,Trick or Trade BOOster Bundle 2023,TTBB23,2023-09-01,promo,False
+23228,SV03: Obsidian Flames,OBF,2023-08-11,main,False
+24864,Southeast Asia Exclusives,SEA,2023-08-05,main,False
+23120,SV02: Paldea Evolved,PAL,2023-06-09,main,False
+22872,SV: Scarlet & Violet Promo Cards,SVP,2023-03-31,promo,False
+22873,SV01: Scarlet & Violet Base Set,SVI,2023-03-31,main,False
+24382,SVE: Scarlet & Violet Energies,SVE,2023-03-31,main,False
+17688,SWSH: Crown Zenith,CRZ,2023-01-20,special,False
+17689,SWSH: Crown Zenith: Galarian Gallery,CRZ:GG,2023-01-20,special,False
+22880,Prize Pack Series Cards,,2022-11-30,promo,False
+3170,SWSH12: Silver Tempest,SWSH12,2022-11-11,main,False
+17674,SWSH12: Silver Tempest Trainer Gallery,SWSH12: TG,2022-11-11,main,False
+3118,SWSH11: Lost Origin,SWSH11,2022-09-09,main,False
+3172,SWSH11: Lost Origin Trainer Gallery,SWSH11: TG,2022-09-09,main,False
+3179,Trick or Trade BOOster Bundle,TTBB,2022-09-01,promo,False
+3150,McDonald's Promos 2022,M22,2022-08-03,promo,False
+3064,Pokemon GO,PGO,2022-07-01,special,False
+3040,SWSH10: Astral Radiance,SWSH10,2022-05-27,main,False
+3068,SWSH10: Astral Radiance Trainer Gallery,SWSH10:TG,2022-05-27,main,False
+3051,Battle Academy 2022,BA22,2022-04-01,promo,False
+2948,SWSH09: Brilliant Stars,SWSH09,2022-02-25,main,False
+3020,SWSH09: Brilliant Stars Trainer Gallery,SWSH09:TG,2022-02-25,main,False
+2906,SWSH08: Fusion Strike,SWSH08,2021-11-12,main,False
+2867,Celebrations,CLB,2021-10-08,special,False
+2931,Celebrations: Classic Collection,CCC,2021-10-08,special,False
+2848,SWSH07: Evolving Skies,SWSH07,2021-08-27,main,False
+2807,SWSH06: Chilling Reign,SWSH06,2021-06-18,main,False
+2765,SWSH05: Battle Styles,SWSH05,2021-03-19,main,False
+2754,Shining Fates,SHF,2021-02-19,special,False
+2781,Shining Fates: Shiny Vault,SHFSV,2021-02-19,special,False
+2782,McDonald's 25th Anniversary Promos,M21,2021-02-09,promo,True
+2701,SWSH04: Vivid Voltage,SWSH04,2020-11-13,main,False
+2685,Champion's Path,CHP,2020-09-25,special,False
+2675,SWSH03: Darkness Ablaze,SWSH03,2020-08-14,main,False
+2686,Battle Academy,BTA,2020-07-31,promo,True
+2626,SWSH02: Rebel Clash,SWSH02,2020-05-01,main,False
+2585,SWSH01: Sword & Shield Base Set,SWSH01,2020-02-07,main,False
+2545,SWSH: Sword & Shield Promo Cards,SWSD,2019-11-15,promo,False
+2534,SM - Cosmic Eclipse,SM12,2019-11-01,main,False
+2555,McDonald's Promos 2019,M19,2019-10-01,promo,False
+2480,Hidden Fates,HIF,2019-08-23,special,False
+2594,Hidden Fates: Shiny Vault,HIF:SV,2019-08-23,special,False
+2464,SM - Unified Minds,SM11,2019-08-02,main,False
+2420,SM - Unbroken Bonds,SM10,2019-05-03,main,False
+2409,Detective Pikachu,DEP,2019-04-05,special,False
+2377,SM - Team Up,SM9,2019-02-01,main,False
+1543,EX Trainer Kit 1: Latias & Latios,PR,2026-10-13,main,False
+1542,EX Trainer Kit 2: Plusle & Minun,PR,2026-10-13,main,False
+1423,Nintendo Promos,PR,2026-10-13,promo,False
+1422,POP Series 1,POP,2026-10-13,main,False
+1447,POP Series 2,POP,2026-10-13,main,False
+1442,POP Series 3,POP,2026-10-13,main,False
+1452,POP Series 4,POP,2026-10-13,main,False
+1439,POP Series 5,POP,2026-10-13,main,False
+1432,POP Series 6,POP,2026-10-13,main,False
+1414,POP Series 7,POP,2026-10-13,main,False
+1450,POP Series 8,POP,2026-10-13,main,False
+1446,POP Series 9,POP,2026-10-13,main,False
+1938,Alternate Art Promos,PR,2026-10-13,promo,True
+2289,Blister Exclusives,BLE,2026-10-13,main,True
+2175,Burger King Promos,BKP,2026-10-13,promo,True
+2776,First Partner Pack,FPP,2026-10-13,promo,True
+2374,Miscellaneous Cards & Products,MCAP,2026-10-13,main,True
+2205,Pikachu World Collection Promos,PWCP,2026-10-13,promo,True
+2332,Professor Program Promos,PPP,2026-10-13,promo,True
