@@ -12,9 +12,6 @@ on:
       every:
         description: "Co ile dni brać archiwum"
         default: "7"
-  push:                     # tymczasowo: pierwszy import z gałęzi roboczej
-    branches: [tcgcsv-history]
-    paths: [".github/workflows/backfill.yml", "scripts/backfill_history.py"]
 
 permissions:
   contents: write
