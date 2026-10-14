@@ -4,16 +4,20 @@ Na historii 2024–2026 produkty zamknięte zyskiwały mocniej niż karty, a lep
   - ETB i booster bundle (zamiast boxów i pojedynczych saszetek),
   - produkty w wieku ok. 1,5 roku od premiery (świeże jeszcze tanieją, bardzo stare rosną wolniej),
   - droższe produkty z danego setu.
+Pomijamy wersje dostępne tylko w sklepach w USA (Pokémon Center itp.).
 Ocena = suma rang tych trzech cech w danym dniu; bez dopasowanych wag.
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 KINDS_UP = ("etb", "booster_bundle")
+# wersje sprzedawane tylko w sklepach w USA (Pokémon Center, sieci) – w Europie praktycznie niedostępne
+US_ONLY = re.compile(r"pokemon center|exclusive|dollar general|sam's club|costco|target|walmart|best buy|gamestop", re.I)
 SWEET_AGE = 18.0  # miesięcy od premiery
 
 
@@ -21,6 +25,7 @@ def load_sealed_weekly(data_dir: str | Path) -> tuple[pd.DataFrame, pd.DataFrame
     """(ceny tygodniowe: data × product_id, katalog sealed)."""
     data_dir = Path(data_dir)
     cat = pd.read_csv(data_dir / "catalog" / "sealed.csv").set_index("product_id")
+    cat = cat[~cat.name.str.contains(US_ONLY, na=False)]
     rows = []
     for f in sorted((data_dir / "prices").glob("*/*/*.csv.gz")):
         d = pd.read_csv(f, usecols=["product_id", "market"])
@@ -84,7 +89,6 @@ def ranking(prices: pd.DataFrame, cat: pd.DataFrame, min_price: float = 20.0) ->
 
 
 def _norm(name: str) -> str:
-    import re
     return re.sub(r"[^a-z0-9]+", " ", str(name).lower().replace("pokémon", "pokemon")).strip()
 
 
