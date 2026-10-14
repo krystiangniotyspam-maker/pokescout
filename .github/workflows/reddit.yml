@@ -41,5 +41,5 @@ jobs:
           git add data
           git diff --cached --quiet && exit 0
           git commit -m "Posty z Reddita $(date -u +%F)"
-          git pull --rebase origin "$GITHUB_REF_NAME"
+          git pull --rebase -X theirs origin "$GITHUB_REF_NAME"   # przy kolizji wygrywają świeżo pobrane pliki
           git push origin HEAD:"$GITHUB_REF_NAME"
