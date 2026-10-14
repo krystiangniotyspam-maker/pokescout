@@ -12,11 +12,16 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Kandydaci
+      - name: pokefolio-data
         run: |
-          for R in sodennis/cardarchive-tcgcsv landonrroy/pokefolio-data Tbaker-maker/Catchem-data RubyCollecting/cardvault-data brentsharon/pokesave-data tcgdex/price-history; do
-            info=$(gh api "repos/$R" --jq '"size=\(.size)KB pushed=\(.pushed_at) branch=\(.default_branch) desc=\(.description)"' 2>&1 | head -c 250)
-            rel=$(gh api "repos/$R/releases?per_page=3" --jq '[.[] | "\(.tag_name)[\([.assets[].name] | join("+"))]"] | join(" ")' 2>&1 | head -c 250)
-            tree=$(gh api "repos/$R/contents" --jq '[.[] | .name] | join(" ")' 2>&1 | head -c 250)
-            echo "::notice title=$R::$info | releases: $rel | root: $tree"
-          done
+          R=landonrroy/pokefolio-data
+          gh api "repos/$R/readme" --jq .content | base64 -d | tr '\n' ' ' | fold -w 300 | head -12 | while read -r l; do echo "::notice title=readme::$l"; done
+          gh api "repos/$R/contents/data" --jq '[.[] | "\(.name)(\(.type))"] | join(" ")' | head -c 900 | while read -r l; do echo "::notice title=data::$l"; done
+          sub=$(gh api "repos/$R/contents/data" --jq '.[0].name')
+          gh api "repos/$R/contents/data/$sub" --jq '[.[] | "\(.name)(\(.type),\(.size))"] | join(" ")' | head -c 900 | while read -r l; do echo "::notice title=data/$sub::$l"; done
+          gh api "repos/$R/commits?per_page=3" --jq '.[] | "\(.commit.author.date) \(.commit.message | split("\n")[0])"' | while read -r l; do echo "::notice title=commits::$l"; done
+      - name: tcgdex
+        run: |
+          R=tcgdex/price-history
+          gh api "repos/$R/contents/en" --jq '[.[] | .name] | join(" ")' | head -c 600 | while read -r l; do echo "::notice title=tcgdex-en::$l"; done
+          gh api "repos/$R/contents/meta" --jq '[.[] | .name] | join(" ")' | head -c 600 | while read -r l; do echo "::notice title=tcgdex-meta::$l"; done
