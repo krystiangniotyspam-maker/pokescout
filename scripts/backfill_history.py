@@ -1,9 +1,8 @@
 """Import historii cen tcgcsv (dzienne kopie cen TCGplayer od 2024-02-08).
 
 Źródła (`--source`):
-  github – publiczna kopia archiwum tcgcsv w wydaniach (Releases) repozytorium
-           github.com/sodennis/cardarchive-tcgcsv: jedno wydanie na dzień, plik
-           prices-3-pokemon.tar.xz z surowym JSON-em tcgcsv (domyślne; luki m.in. 2026-09-16 … 2026-10-04)
+  github – publiczna kopia archiwum tcgcsv w repozytorium github.com/landonrroy/pokefolio-data:
+           data/RRRR/prices-RRRR-MM-DD.tar.gz z surowym JSON-em tcgcsv (Pokémon), 2024-02-08 … 2026-09-15
   tcgcsv – oryginalne archiwum tcgcsv.com; od 10.2026 tymczasowo wyłączone przez autora (403)
 
 Gdy danego dnia brakuje, bierze najbliższy z kolejnych 3 dni.
@@ -36,12 +35,12 @@ from pokescout.tcgcsv import ARCHIVE_START, BASE, CATEGORY, Client  # noqa: E402
 from scripts.collect_prices import CATALOG, DATA, price_rows, save_prices  # noqa: E402
 
 
-GITHUB_MIRROR = "https://github.com/sodennis/cardarchive-tcgcsv/releases/download"
+GITHUB_MIRROR = "landonrroy/pokefolio-data"
 
 
 def archive_url(day: dt.date, source: str = "tcgcsv") -> str:
     if source == "github":
-        return f"{GITHUB_MIRROR}/{day:%Y-%m-%d}/prices-{CATEGORY}-pokemon.tar.xz"
+        return f"https://raw.githubusercontent.com/{GITHUB_MIRROR}/main/data/{day:%Y}/prices-{day:%Y-%m-%d}.tar.gz"
     return f"{BASE}/archive/tcgplayer/prices-{day:%Y-%m-%d}.ppmd.7z"
 
 
@@ -76,14 +75,21 @@ def read_archive(path: Path, groups: set[int], workdir: Path) -> list[dict]:
     return rows
 
 
+def download(client: Client, url: str, path: Path) -> None:
+    with client.get(url, stream=True) as r, open(path, "wb") as fh:
+        for chunk in r.iter_content(1 << 20):
+            fh.write(chunk)
+
+
 def backfill_day(client: Client, day: dt.date, groups: set[int], keep: set[int],
                  source: str = "tcgcsv") -> int:
     with tempfile.TemporaryDirectory() as tmp:
         tmp = Path(tmp)
         arc = tmp / "archive"
-        with client.get(archive_url(day, source), stream=True) as r, open(arc, "wb") as fh:
-            for chunk in r.iter_content(1 << 20):
-                fh.write(chunk)
+        url = archive_url(day, source)
+        download(client, url, arc)
+        if arc.read_bytes()[:40].startswith(b"version https://git-lfs"):  # plik w Git LFS
+            download(client, url.replace("raw.githubusercontent.com", "media.githubusercontent.com/media"), arc)
         rows = read_tar(arc, groups) if source == "github" else read_archive(arc, groups, tmp / "x")
     pr = price_rows(rows)
     pr = pr[pr.product_id.isin(keep)]

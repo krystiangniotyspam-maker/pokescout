@@ -12,7 +12,7 @@ on:
       every:
         description: "Co ile dni brać archiwum"
         default: "7"
-  push:                     # tymczasowo: pierwszy import z gałęzi roboczej (usunąć przed scaleniem)
+  push:                     # tymczasowo: import z gałęzi roboczej (usunąć przed scaleniem)
     branches: [tcgcsv-history]
     paths: [".github/workflows/backfill.yml"]
 
@@ -38,7 +38,7 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Katalog (tylko jeśli go brak – tcgcsv prosi o jedno pobranie dziennie)
         run: test -f data/catalog/cards.csv || python scripts/collect_prices.py
-      - name: Import z kopii archiwum na GitHubie
+      - name: Import z kopii archiwum na GitHubie (pokefolio-data)
         timeout-minutes: 100
         run: |
           args="--source github --start ${{ inputs.start || '2024-02-08' }} --every ${{ inputs.every || '7' }}"

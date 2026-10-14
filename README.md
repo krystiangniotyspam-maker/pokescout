@@ -73,7 +73,7 @@ ok. 2 zapytania na set (kilka minut na cały przebieg). Daje też ceny **zamkni�
 (booster box, bundle, ETB), więc sygnał „sealed drożeje” działa na prawdziwych danych,
 oraz **historię od 08.02.2024**: autor tcgcsv w 10.2026 tymczasowo
 wyłączył swoje archiwum, więc import (`scripts/backfill_history.py`) bierze je z publicznej kopii
-[sodennis/cardarchive-tcgcsv](https://github.com/sodennis/cardarchive-tcgcsv) (wydania na GitHubie, luka 16.09–04.10.2026).
+[landonrroy/pokefolio-data](https://github.com/landonrroy/pokefolio-data) (dzienne pliki 08.02.2024–15.09.2026; od 14.10.2026 dane zbiera nasz codzienny przebieg).
 
 | Plik | Zawartość |
 |---|---|
