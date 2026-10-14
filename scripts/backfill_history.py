@@ -1,5 +1,9 @@
 """Import historii cen z archiwum tcgcsv.com (dzienne kopie od 2024-02-08).
 
+UWAGA (10.2026): autor tcgcsv tymczasowo wyłączył archiwum (HTTP 403 z komunikatem
+o kosztach serwera). Skrypt zostaje na wypadek, gdyby archiwum wróciło; przy 403 kończy
+od razu zamiast ponawiać.
+
 Bierze co `--every` dni jedno archiwum, wyciąga z niego ceny Pokémonów (kategoria 3)
 i zapisuje tylko produkty z katalogu (data/catalog/cards.csv i sealed.csv) w tym samym
 formacie co codzienny zrzut: data/prices/RRRR/MM/DD.csv.gz. Dni, które już są, pomija.
@@ -90,6 +94,9 @@ def main() -> int:
                 done += 1
                 print(f"{day}: {n} cen")
             except Exception as e:  # brak archiwum z danego dnia itp. – idziemy dalej
+                if "HTTP 403" in str(e):
+                    print(f"::error title=backfill::archiwum tcgcsv niedostępne (403) – przerywam")
+                    return 1
                 failed.append(str(day))
                 print(f"::warning title=backfill::{day}: {type(e).__name__}: {e}")
         day += dt.timedelta(days=a.every)

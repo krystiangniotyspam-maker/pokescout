@@ -24,6 +24,8 @@ jobs:
           cache: pip
       - run: pip install -r requirements.txt
       - name: Zbierz ceny (tcgcsv.com)
+        env:
+          PYTHONUNBUFFERED: "1"
         run: python scripts/collect_prices.py
       - name: Zapisz dane w repo
         run: |

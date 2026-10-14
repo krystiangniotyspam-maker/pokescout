@@ -4,9 +4,11 @@ Endpointy (Pokémon = kategoria 3):
   https://tcgcsv.com/tcgplayer/3/groups                 – sety (groupId, name, publishedOn, isSupplemental)
   https://tcgcsv.com/tcgplayer/3/{groupId}/products     – produkty: karty (extendedData: Number, Rarity) i sealed
   https://tcgcsv.com/tcgplayer/3/{groupId}/prices       – ceny: productId, subTypeName, market/low/mid
-  https://tcgcsv.com/archive/tcgplayer/prices-RRRR-MM-DD.ppmd.7z – archiwum cen z danego dnia (od 2024-02-08)
+  https://tcgcsv.com/archive/tcgplayer/prices-RRRR-MM-DD.ppmd.7z – archiwum cen z danego dnia (od 2024-02-08);
+      od 10.2026 tymczasowo wyłączone przez autora (403)
 
-Zasady serwisu: rozpoznawalny User-Agent i krótka przerwa między zapytaniami.
+Zasady serwisu: rozpoznawalny User-Agent, krótka przerwa między zapytaniami i każdy plik cen
+najwyżej raz na 24 godziny.
 """
 from __future__ import annotations
 
@@ -57,7 +59,7 @@ class Client:
                 time.sleep(self.pause)
                 return r
             last = f"HTTP {r.status_code}"
-            if r.status_code == 404:
+            if r.status_code in (403, 404):
                 break
             time.sleep(3 * (i + 1))
         raise RuntimeError(f"Nie udało się pobrać {url} ({last})")
