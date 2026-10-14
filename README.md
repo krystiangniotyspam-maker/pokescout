@@ -71,9 +71,9 @@ Bez tej reguły algorytm wybierał głównie karty z powoli tanieącego setu spe
 Źródło: **[tcgcsv.com](https://tcgcsv.com)** – codzienne kopie cen TCGplayer, bez klucza API,
 ok. 2 zapytania na set (kilka minut na cały przebieg). Daje też ceny **zamkniętych produktów**
 (booster box, bundle, ETB), więc sygnał „sealed drożeje” działa na prawdziwych danych,
-oraz (gdy jest dostępne) **archiwum dziennych cen od 08.02.2024**. W 10.2026 autor tcgcsv tymczasowo
-wyłączył archiwum, więc historia rośnie na razie tylko z codziennych zrzutów (`scripts/backfill_history.py`
-czeka na jego powrót).
+oraz **historię od 08.02.2024**: autor tcgcsv w 10.2026 tymczasowo
+wyłączył swoje archiwum, więc import (`scripts/backfill_history.py`) bierze je z publicznej kopii
+[sodennis/cardarchive-tcgcsv](https://github.com/sodennis/cardarchive-tcgcsv) (wydania na GitHubie, luka 16.09–04.10.2026).
 
 | Plik | Zawartość |
 |---|---|
@@ -123,6 +123,6 @@ Cechy przekrojowe dodane do modelu: karta vs podobne karty (`rv_z`), popularnoś
 ## 8. Automat w chmurze (GitHub Actions)
 
 - `.github/workflows/daily.yml` – codziennie 5:17 UTC: `scripts/collect_prices.py` i commit danych do repo.
-- Import historii (`scripts/backfill_history.py`) – do uruchomienia, gdy archiwum tcgcsv wróci.
+- `.github/workflows/backfill.yml` – ręcznie (**Actions → Import historii cen → Run workflow**): import historii za wybrany okres (domyślnie od 08.02.2024 co 7 dni). Dni, które już są, pomija.
 
 Zapisy do repo idą po kolei (`concurrency: data-write`), więc przebiegi nie nadpisują sobie danych.
