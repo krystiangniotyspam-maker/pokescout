@@ -16,7 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from pokescout.data import load_repo_history  # noqa: E402
-from pokescout.evaluate import FEATURES, HORIZONS, build_panel, evaluate_scores, fit_latest, walk_forward  # noqa: E402
+from pokescout.evaluate import (FEATURES, HORIZONS, build_panel, combo_score, evaluate_scores,  # noqa: E402
+                                fit_latest, walk_forward)
 
 REPORTS = ROOT / "reports"
 TOP_K = 20
@@ -54,6 +55,8 @@ def main() -> int:
              f"`top_excess` = średni zwrot {TOP_K} najwyżej ocenionych kart ponad medianę rynku, "
              "`top_hit_rate` = jaki odsetek z nich pobił rynek.", ""]
 
+    combo = combo_score(panel)
+    panel["combo"] = combo
     for h in HORIZONS:
         y = f"ex_{h}"
         if panel[y].notna().sum() == 0:
@@ -62,6 +65,7 @@ def main() -> int:
         scores |= {f"cecha: −{c}": -panel[c] for c in ("drawdown", "rv_z", "slope_90", "range_pos_180")}
         scores["reguły: moduł A (ocena bez bramek)"] = panel["rule_a"]
         scores["reguły: moduł B1 (tania vs podobne)"] = -panel["rv_z"]
+        scores["ocena C: popularność + wiek + tania + dno"] = combo
         scores["model: gradient boosting"] = walk_forward(panel, h, model="gbm")
         scores["model: ridge na rangach"] = walk_forward(panel, h, model="ridge")
         res = evaluate_scores(panel, scores, h, top_k=TOP_K)
@@ -74,15 +78,31 @@ def main() -> int:
                   f"{len(gated)} obserwacji, średni zwrot ponad rynek "
                   f"{np.expm1(gated[y].mean()) if len(gated) else float('nan'):+.1%}.", "",
                   fmt(res), ""]
+        if h <= 6:  # czy sygnał działa w obu połowach okresu (inny stan rynku)
+            dates = sorted(known.date.unique())
+            mid = dates[len(dates) // 2]
+            main = ["ocena C: popularność + wiek + tania + dno", "reguły: moduł A (ocena bez bramek)",
+                    "reguły: moduł B1 (tania vs podobne)", "cecha: weeks_since_low", "cecha: −drawdown",
+                    "model: gradient boosting"]
+            rows = []
+            for label, part in (("1. połowa", panel.date < mid), ("2. połowa", panel.date >= mid)):
+                r = evaluate_scores(panel[part], {k: scores[k][part] for k in main}, h, top_k=TOP_K)
+                r.insert(0, "okres", f"{label} (od {panel[part].date.min():%Y-%m})")
+                rows.append(r)
+            lines += [f"Stabilność ({h} mies.): ten sam test osobno w pierwszej i drugiej połowie okresu.", "",
+                      fmt(pd.concat(rows)), ""]
 
     model = fit_latest(panel, 6)
     now = panel[panel.date == panel.date.max()].copy()
     now["model_6m"] = model.predict(now[FEATURES])
-    cols = ["card_id", "name", "set_id", "price_now", "drawdown", "slope_90", "rv_z", "rule_a", "rule_a_pass", "model_6m"]
+    cols = ["name", "set_name", "price_now", "age_months", "poke_pop", "rv_z", "weeks_since_low",
+            "combo", "model_6m", "rule_a_pass"]
     rank = now.sort_values("model_6m", ascending=False)[cols]
     rank.to_csv(reports / "ranking.csv", index=False)
     lines += ["## Bieżący ranking modelu (6 mies.)", "",
-              f"Stan na {panel.date.max():%Y-%m-%d}. `model_6m` = przewidywany log-zwrot ponad rynek.", "",
+              f"Stan na {panel.date.max():%Y-%m-%d}. `model_6m` = przewidywany przez model log-zwrot ponad rynek "
+              "w 6 mies. (0,30 ≈ +35%), `combo` = ocena C dla porównania (wyżej = lepiej). "
+              "To lista do sprawdzenia, nie rekomendacja zakupu.", "",
               rank.head(25).to_markdown(index=False, floatfmt=".2f"), ""]
     (reports / "evaluation.md").write_text("\n".join(lines))
     print("\n".join(lines))

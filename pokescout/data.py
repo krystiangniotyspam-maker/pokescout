@@ -50,7 +50,8 @@ SPECIAL_SET_KEYWORDS = (
 )
 # Produkty drukowane masowo albo spoza zwykłej dystrybucji
 PROMO_KEYWORDS = ("promo", "mcdonald", "trick or trade", "battle academy", "first partner",
-                  "deck exclusives", "league & championship", "prize pack", "jumbo")
+                  "deck exclusives", "league & championship", "prize pack", "jumbo",
+                  "trading card game classic", "my first battle", "world championship")
 
 
 def guess_set_type(set_name: str) -> str:
@@ -103,7 +104,7 @@ def load_repo_history(data_dir: str | Path, price_col: str = "market"):
         metas[cid] = CardMeta(
             card_id=cid, name=r.name, set_id=str(r.group_id), rarity=str(r.rarity),
             release_date=r.release_date,
-            set_type=r.set_type if isinstance(r.set_type, str) and r.set_type else guess_set_type(r.set_name),
+            set_type=guess_set_type(r.set_name),  # zawsze wg aktualnych reguł, nie z dnia zapisu katalogu
             reprint_announced=bool(reprint) if reprint is not None and not pd.isna(reprint) else False,
             buzz=None if buzz is None or pd.isna(buzz) else float(buzz),
             set_name=r.set_name,

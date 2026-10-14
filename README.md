@@ -113,10 +113,26 @@ Miary: **IC** (korelacja rang oceny ze zwrotem, liczona w każdej dacie osobno),
 Cechy przekrojowe dodane do modelu: karta vs podobne karty (`rv_z`), popularność Pokémona z danych
 (`poke_pop` – mediana cen jego innych kart IR+), trend całego setu (`set_trend_90`), karta vs set (`set_rel`).
 
+### Wyniki na prawdziwej historii (02.2024 – 10.2026)
+
+Pełny raport: [`reports/evaluation.md`](reports/evaluation.md). Najważniejsze:
+
+- **Moduł A („dołek po premierze”) prawie nic nie przewiduje**: IC ≈ 0,04, w drugiej połowie okresu ≈ 0.
+  Karty głęboko pod szczytem dalej radziły sobie gorzej niż rynek (cecha `drawdown` ma ujemne IC w obu połowach).
+- **Działa**: popularność Pokémona liczona z cen (`poke_pop`), starszy set, karta tańsza niż podobne
+  (moduł B1 – najbardziej stabilny sygnał) i dno utrzymane od tygodni (`weeks_since_low`).
+- **Model uczony (gradient boosting, walk-forward)**: od kiedy ma ok. rok danych do nauki (od 07.2025),
+  20 najwyżej ocenionych kart biło rynek o ok. +10% w 3 i 6 mies., 61–68% z nich było lepszych od mediany.
+- **Ocena C** (suma rang: popularność + wiek + tania vs podobne + dno) dawała +51% w boomie 2024/25,
+  ale tylko ok. +9% później; cechy do niej wybrano na tych samych danych, więc wynik jest optymistyczny.
+
+Zastrzeżenia: tylko ok. 2 lata danych i jeden cykl rynku (wzrosty, potem korekta), ceny TCGplayer w USD
+(nie Cardmarket), a przy kartach za kilka dolarów prowizje i wysyłka zjadają zysk.
+
 ## 7. Następne kroki
 
-1. Pierwszy test na prawdziwej historii i decyzja, czy reguły zostają, czy zastępuje je model.
-2. Kalibracja progów i wag na wynikach testu (uwaga na przeuczenie – mało lat danych).
+1. Ranking z modelu jako główny wynik (z ponownym uczeniem co tydzień), moduł A do przebudowy albo usunięcia.
+2. Śledzić wyniki na nowych danych (prawdziwy test poza próbą).
 3. `buzz` z Reddita/YouTube – dodać tylko, jeśli test pokaże poprawę.
 4. Raport na Discord (na razie wyłączony w workflow).
 

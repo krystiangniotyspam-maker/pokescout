@@ -70,7 +70,7 @@ def build_panel(prices: dict[str, pd.Series], metas: dict[str, CardMeta], sealed
                 continue
             st = static[cid]
             rule = score_trough(f, m, cfg)
-            row = dict(f.to_dict(), date=d, set_id=m.set_id, name=m.name, poke=st["poke"],
+            row = dict(f.to_dict(), date=d, set_id=m.set_id, set_name=m.set_name, name=m.name, poke=st["poke"],
                        tier=st["tier"], tier_score=TIER_SCORE[st["tier"]], rarity_w=st["rarity_w"],
                        special=st["special"], logp=np.log(f.price_now),
                        rule_a=rule.components["raw_score"], rule_a_pass=rule.passed_gates)
@@ -102,6 +102,17 @@ def build_panel(prices: dict[str, pd.Series], metas: dict[str, CardMeta], sealed
     for h in HORIZONS:
         df[f"ex_{h}"] = df[f"fwd_{h}"] - df.groupby("date")[f"fwd_{h}"].transform("median")
     return df.reset_index(drop=True)
+
+
+# Ocena C – suma rang sygnałów, które na historii 2024–2026 przewidywały zwrot ponad rynek:
+# popularność Pokémona z danych, wiek setu, karta tańsza niż podobne, dno trzymane od tygodni.
+# Bez dopasowanych wag (mniejsze ryzyko przeuczenia niż model), wszystko liczone w dniu decyzji.
+COMBO = {"poke_pop": 1, "age_months": 1, "rv_z": -1, "weeks_since_low": 1}
+
+
+def combo_score(panel: pd.DataFrame) -> pd.Series:
+    by_date = panel.groupby("date")
+    return sum(sign * (by_date[c].rank(pct=True).fillna(0.5) - 0.5) for c, sign in COMBO.items())
 
 
 def walk_forward(panel: pd.DataFrame, horizon: int, min_train_dates: int = 6, model: str = "gbm") -> pd.Series:
