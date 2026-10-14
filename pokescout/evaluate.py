@@ -22,10 +22,13 @@ from .scoring import CardMeta, Config, score_trough
 from .tiers import TIER_SCORE, pokemon_key, pokemon_tier, rarity_weight
 
 HORIZONS = (3, 6, 12)
+# Koszty sprzedaży raw karty na TCGplayer: prowizja + płatność ok. 13%, wysyłka po ok. $1,5 w każdą stronę
+FEE, SHIP = 0.13, 1.5
 FEATURES = [
     "drawdown", "range_pos_180", "slope_30", "slope_60", "slope_90", "slope_180", "vol_ratio",
     "weeks_since_low", "above_low", "sealed_slope_90", "age_months", "logp", "tier_score",
     "rarity_w", "special", "history_complete", "rv_z", "poke_pop", "set_trend_90", "set_rel",
+    "spread", "new_same_poke_90", "new_same_poke_365",
     *BUZZ_FEATURES,
 ]
 
@@ -38,8 +41,17 @@ def _robust_z(x: pd.Series) -> pd.Series:
 
 def build_panel(prices: dict[str, pd.Series], metas: dict[str, CardMeta], sealed: dict[str, pd.Series],
                 step_days: int = 14, min_price: float = 5.0, min_history_days: int = 182,
-                start: pd.Timestamp | None = None, buzz: pd.DataFrame | None = None) -> pd.DataFrame:
+                start: pd.Timestamp | None = None, buzz: pd.DataFrame | None = None,
+                low_prices: dict[str, pd.Series] | None = None) -> pd.DataFrame:
     weekly = {cid: _weekly(s) for cid, s in prices.items()}
+    low_arr = {cid: (_days(w.index), w.to_numpy(dtype=float))
+               for cid, w in ((c, _weekly(s)) for c, s in (low_prices or {}).items()) if len(w)}
+    # premiery kart IR+ każdego Pokémona (dni od 1970) – do liczenia „nowych kart tego samego Pokémona”
+    releases: dict[str, list[tuple[int, str]]] = {}
+    for cid, m in metas.items():
+        if rarity_weight(m.rarity, m.name) >= 0.75 and m.set_type != "promo":
+            releases.setdefault(pokemon_key(m.name), []).append(
+                (int(np.datetime64(m.release_date.date(), "D").astype(np.int64)), m.set_id))
     arrays = {cid: (_days(w.index), w.to_numpy(dtype=float)) for cid, w in weekly.items() if len(w)}
     sealed_arr = {k: (_days(w.index), w.to_numpy(dtype=float))
                   for k, w in ((k, _weekly(v)) for k, v in sealed.items()) if len(w)}
@@ -72,7 +84,17 @@ def build_panel(prices: dict[str, pd.Series], metas: dict[str, CardMeta], sealed
                 continue
             st = static[cid]
             rule = score_trough(f, m, cfg)
+            lo = low_arr.get(cid)
+            spread = np.nan
+            if lo:
+                lk = np.searchsorted(lo[0], dd, side="right")
+                if lk and lo[0][lk - 1] >= dd - 21 and lo[1][lk - 1] > 0:
+                    spread = float(np.clip(np.log(f.price_now / lo[1][lk - 1]), -1, 2))
+            rel = releases.get(st["poke"], [])
+            new90 = sum(1 for r, sid in rel if dd - 90 <= r <= dd and sid != m.set_id)
+            new365 = sum(1 for r, sid in rel if dd - 365 <= r <= dd and sid != m.set_id)
             row = dict(f.to_dict(), date=d, set_id=m.set_id, set_name=m.set_name, name=m.name, poke=st["poke"],
+                       spread=spread, new_same_poke_90=new90, new_same_poke_365=new365,
                        tier=st["tier"], tier_score=TIER_SCORE[st["tier"]], rarity_w=st["rarity_w"],
                        special=st["special"], logp=np.log(f.price_now),
                        rule_a=rule.components["raw_score"], rule_a_pass=rule.passed_gates)
@@ -81,6 +103,8 @@ def build_panel(prices: dict[str, pd.Series], metas: dict[str, CardMeta], sealed
                 j = np.searchsorted(t, ed, side="right")
                 p = v[j - 1] if j > 0 and t[j - 1] > ed - 21 and t[j - 1] > dd else np.nan
                 row[f"fwd_{h}"] = np.log(p / f.price_now) if p > 0 else np.nan
+                # zwrot netto: kupno z wysyłką, sprzedaż po prowizji i wysyłce
+                row[f"net_{h}"] = ((p * (1 - FEE) - SHIP) / (f.price_now + SHIP) - 1) if p > 0 else np.nan
             rows.append(row)
     df = pd.DataFrame(rows)
     if df.empty:
@@ -111,6 +135,8 @@ def build_panel(prices: dict[str, pd.Series], metas: dict[str, CardMeta], sealed
             df[c] = np.nan
     for h in HORIZONS:
         df[f"ex_{h}"] = df[f"fwd_{h}"] - df.groupby("date")[f"fwd_{h}"].transform("median")
+        net = np.log1p(df[f"net_{h}"].clip(lower=-0.95))
+        df[f"exn_{h}"] = net - net.groupby(df["date"]).transform("median")
     return df.reset_index(drop=True)
 
 
@@ -125,12 +151,15 @@ def combo_score(panel: pd.DataFrame) -> pd.Series:
     return sum(sign * (by_date[c].rank(pct=True).fillna(0.5) - 0.5) for c, sign in COMBO.items())
 
 
-def walk_forward(panel: pd.DataFrame, horizon: int, min_train_dates: int = 6, model: str = "gbm") -> pd.Series:
-    """Ocena modelu dla każdej daty, uczonego tylko na wynikach znanych w tej dacie."""
+def walk_forward(panel: pd.DataFrame, horizon: int, min_train_dates: int = 6, model: str = "gbm",
+                 target: str = "ex") -> pd.Series:
+    """Ocena modelu dla każdej daty, uczonego tylko na wynikach znanych w tej dacie.
+
+    target: "ex" – log-zwrot ponad rynek, "exn" – zwrot netto po kosztach ponad rynek."""
     from sklearn.ensemble import HistGradientBoostingRegressor
     from sklearn.linear_model import Ridge
 
-    y_col = f"ex_{horizon}"
+    y_col = f"{target}_{horizon}"
     out = pd.Series(np.nan, index=panel.index)
     dates = sorted(panel["date"].unique())
     for d in dates:
@@ -154,11 +183,11 @@ def walk_forward(panel: pd.DataFrame, horizon: int, min_train_dates: int = 6, mo
     return out
 
 
-def fit_latest(panel: pd.DataFrame, horizon: int = 6):
+def fit_latest(panel: pd.DataFrame, horizon: int = 6, target: str = "ex"):
     """Model uczony na wszystkich znanych wynikach – do bieżącego rankingu."""
     from sklearn.ensemble import HistGradientBoostingRegressor
 
-    y_col = f"ex_{horizon}"
+    y_col = f"{target}_{horizon}"
     train = panel[panel[y_col].notna()]
     m = HistGradientBoostingRegressor(max_depth=3, learning_rate=0.05, max_iter=250,
                                       min_samples_leaf=100, l2_regularization=1.0, random_state=0)
@@ -167,16 +196,17 @@ def fit_latest(panel: pd.DataFrame, horizon: int = 6):
 
 
 def evaluate_scores(panel: pd.DataFrame, scores: dict[str, pd.Series], horizon: int,
-                    top_k: int = 20, step_days: int = 14) -> pd.DataFrame:
+                    top_k: int = 20, step_days: int = 14, min_price: float = 0.0) -> pd.DataFrame:
     """Tabela: IC, t-stat IC, zwrot top-K ponad rynek, odsetek trafień, liczba dat.
 
     Daty decyzji co 2 tygodnie przy horyzoncie 6 mies. dają nakładające się okresy, więc
     zwykły t-stat jest zawyżony; ic_t_adj koryguje go do liczby niezależnych okresów."""
-    y_col = f"ex_{horizon}"
+    y_col, n_col = f"ex_{horizon}", f"net_{horizon}"
     rows = []
     for name, s in scores.items():
-        df = panel.assign(_s=s)[["date", "_s", y_col]].dropna()
-        ics, tops, hits = [], [], []
+        df = panel.assign(_s=s)[["date", "_s", y_col, n_col, "price_now"]].dropna()
+        df = df[df.price_now >= min_price]
+        ics, tops, hits, nets = [], [], [], []
         for _, g in df.groupby("date"):
             if len(g) < max(30, top_k):
                 continue
@@ -184,6 +214,7 @@ def evaluate_scores(panel: pd.DataFrame, scores: dict[str, pd.Series], horizon: 
             t = g.nlargest(top_k, "_s")
             tops.append(t[y_col].mean())
             hits.append((t[y_col] > 0).mean())
+            nets.append(t[n_col].mean())
         if not ics:
             continue
         ics = np.array(ics)
@@ -192,5 +223,6 @@ def evaluate_scores(panel: pd.DataFrame, scores: dict[str, pd.Series], horizon: 
             ic_t_adj=(ics.mean() / (ics.std(ddof=1) + 1e-12) * np.sqrt(len(ics))
                       * np.sqrt(min(1.0, step_days / (horizon * 30.44)))) if len(ics) > 1 else np.nan,
             top_excess=np.expm1(np.mean(tops)), top_hit_rate=np.mean(hits),
+            top_net=np.mean(nets),  # średni zwrot netto (po kosztach) z top-K, nie ponad rynek
         ))
     return pd.DataFrame(rows).sort_values("ic", ascending=False).reset_index(drop=True)

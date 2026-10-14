@@ -23,6 +23,7 @@ from pokescout.evaluate import (FEATURES, HORIZONS, build_panel, combo_score, ev
 
 REPORTS = ROOT / "reports"
 TOP_K = 20
+MIN_INVEST = 20.0  # USD – ranking i kontrola na żywo tylko dla kart, na których koszty nie zjadają zysku
 
 
 def fmt(df: pd.DataFrame) -> str:
@@ -31,7 +32,41 @@ def fmt(df: pd.DataFrame) -> str:
         d[c] = d[c].map(lambda x: f"{x:+.3f}" if c == "ic" else f"{x:+.1f}")
     d["top_excess"] = d["top_excess"].map(lambda x: f"{x:+.1%}")
     d["top_hit_rate"] = d["top_hit_rate"].map(lambda x: f"{x:.0%}")
+    d["top_net"] = d["top_net"].map(lambda x: f"{x:+.1%}")
     return d.to_markdown(index=False)
+
+
+def track_live(panel: pd.DataFrame, rank: pd.DataFrame, reports: Path) -> list[str]:
+    """Kontrola na żywo: zapisuje top-20 z każdego dnia rankingu i rozlicza je, gdy minie horyzont.
+
+    Te wybory powstały bez znajomości przyszłości, więc to jedyny test, którego nie da się
+    (nawet nieświadomie) dopasować do historii."""
+    log_f = reports / "picks_log.csv"
+    log = pd.read_csv(log_f, parse_dates=["date"], dtype={"card_id": str}) if log_f.exists() else pd.DataFrame()
+    today = panel.date.max()
+    if log.empty or today not in set(log.date):
+        top = rank.head(TOP_K).assign(date=today, rank=range(1, min(TOP_K, len(rank)) + 1))
+        new = top[["date", "rank", "card_id", "name", "price_now", "model_net_6m"]]
+        log = pd.concat([log, new], ignore_index=True) if len(log) else new
+        log.to_csv(log_f, index=False)
+    lines = ["## Kontrola na żywo", "",
+             f"Każdy przebieg zapisuje top-{TOP_K} do `reports/picks_log.csv`; po 3 i 6 mies. liczymy, jak wypadły.", ""]
+    rows = []
+    p = panel.assign(card_id=panel.card_id.astype(str))
+    for h in (3, 6):
+        j = log.merge(p[["date", "card_id", f"ex_{h}", f"net_{h}"]], on=["date", "card_id"], how="left")
+        done = j[j[f"ex_{h}"].notna()]
+        for d, g in done.groupby("date"):
+            rows.append(dict(data=f"{d:%Y-%m-%d}", horyzont=f"{h} mies.", kart=len(g),
+                             ponad_rynek=f"{np.expm1(g[f'ex_{h}'].mean()):+.1%}",
+                             pobilo_rynek=f"{(g[f'ex_{h}'] > 0).mean():.0%}",
+                             netto=f"{g[f'net_{h}'].mean():+.1%}"))
+    if rows:
+        lines += [pd.DataFrame(rows).to_markdown(index=False), ""]
+    else:
+        lines += [f"Zapisane dni z wyborami: {log.date.nunique()}. Pierwsze wyniki po 3 mies. "
+                  f"od {log.date.min():%Y-%m-%d}.", ""]
+    return lines
 
 
 def main() -> int:
@@ -48,7 +83,8 @@ def main() -> int:
     posts = load_reddit(a.data)
     buzz = buzz_features(posts, {pokemon_key(m.name) for m in metas.values()}) if len(posts) else None
     print(f"Posty z Reddita: {len(posts)}")
-    panel = build_panel(prices, metas, sealed, buzz=buzz)
+    low, *_ = load_repo_history(a.data, price_col="low")
+    panel = build_panel(prices, metas, sealed, buzz=buzz, low_prices=low)
     print(f"Panel: {len(panel)} wierszy, {panel.date.nunique()} dat, {panel.card_id.nunique()} kart")
     reports.mkdir(exist_ok=True)
 
@@ -58,7 +94,8 @@ def main() -> int:
              "**Jak czytać:** IC = korelacja rang oceny ze zwrotem ponad rynek (0 = brak związku, "
              "0,05 = użyteczny sygnał w finansach, 0,1+ = mocny). `ic_t_adj` > 2 = raczej nie przypadek. "
              f"`top_excess` = średni zwrot {TOP_K} najwyżej ocenionych kart ponad medianę rynku, "
-             "`top_hit_rate` = jaki odsetek z nich pobił rynek.", ""]
+             "`top_hit_rate` = jaki odsetek z nich pobił rynek, `top_net` = ich średni zwrot netto po kosztach "
+             "(prowizja 13% i wysyłka $1,5 w każdą stronę) – realny zysk, nie ponad rynek.", ""]
 
     combo = combo_score(panel)
     panel["combo"] = combo
@@ -73,6 +110,7 @@ def main() -> int:
         scores["ocena C: popularność + wiek + tania + dno"] = combo
         scores["model: gradient boosting"] = walk_forward(panel, h, model="gbm")
         scores["model: ridge na rangach"] = walk_forward(panel, h, model="ridge")
+        scores["model: gradient boosting, cel zysk netto"] = walk_forward(panel, h, model="gbm", target="exn")
         res = evaluate_scores(panel, scores, h, top_k=TOP_K)
         res.to_csv(reports / f"evaluation_{h}m.csv", index=False)
 
@@ -83,6 +121,11 @@ def main() -> int:
                   f"{len(gated)} obserwacji, średni zwrot ponad rynek "
                   f"{np.expm1(gated[y].mean()) if len(gated) else float('nan'):+.1%}.", "",
                   fmt(res), ""]
+        main_inv = ["model: gradient boosting", "model: gradient boosting, cel zysk netto",
+                    "ocena C: popularność + wiek + tania + dno", "reguły: moduł B1 (tania vs podobne)",
+                    "reguły: moduł A (ocena bez bramek)"]
+        inv = evaluate_scores(panel, {k: scores[k] for k in main_inv}, h, top_k=TOP_K, min_price=MIN_INVEST)
+        lines += [f"Tylko karty od ${MIN_INVEST:.0f} (przy tańszych koszty zjadają zysk):", "", fmt(inv), ""]
         if h <= 6:  # czy sygnał działa w obu połowach okresu (inny stan rynku)
             dates = sorted(known.date.unique())
             mid = dates[len(dates) // 2]
@@ -98,17 +141,20 @@ def main() -> int:
                       fmt(pd.concat(rows)), ""]
 
     model = fit_latest(panel, 6)
+    model_net = fit_latest(panel, 6, target="exn")
     now = panel[panel.date == panel.date.max()].copy()
     now["model_6m"] = model.predict(now[FEATURES])
-    cols = ["name", "set_name", "price_now", "age_months", "poke_pop", "rv_z", "weeks_since_low",
-            "combo", "model_6m", "rule_a_pass"]
-    rank = now.sort_values("model_6m", ascending=False)[cols]
+    now["model_net_6m"] = model_net.predict(now[FEATURES])
+    cols = ["card_id", "name", "set_name", "price_now", "spread", "poke_pop", "rv_z", "weeks_since_low",
+            "buzz_share", "combo", "model_6m", "model_net_6m"]
+    rank = now[now.price_now >= MIN_INVEST].sort_values("model_net_6m", ascending=False)[cols]
     rank.to_csv(reports / "ranking.csv", index=False)
-    lines += ["## Bieżący ranking modelu (6 mies.)", "",
-              f"Stan na {panel.date.max():%Y-%m-%d}. `model_6m` = przewidywany przez model log-zwrot ponad rynek "
-              "w 6 mies. (0,30 ≈ +35%), `combo` = ocena C dla porównania (wyżej = lepiej). "
-              "To lista do sprawdzenia, nie rekomendacja zakupu.", "",
-              rank.head(25).to_markdown(index=False, floatfmt=".2f"), ""]
+    lines += ["## Bieżący ranking modelu (6 mies., karty od $20)", "",
+              f"Stan na {panel.date.max():%Y-%m-%d}. `model_net_6m` = przewidywany zwrot netto ponad rynek "
+              "w 6 mies. (log, 0,20 ≈ +22%), `model_6m` = to samo bez kosztów, `combo` = ocena C, "
+              "`spread` = log(cena rynkowa / najniższa oferta). To lista do sprawdzenia, nie rekomendacja zakupu.", "",
+              rank.drop(columns="card_id").head(25).to_markdown(index=False, floatfmt=".2f"), ""]
+    lines += track_live(panel, rank, reports)
     (reports / "evaluation.md").write_text("\n".join(lines))
     print("\n".join(lines))
     return 0

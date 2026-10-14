@@ -1,0 +1,42 @@
+name: Cotygodniowy ranking
+
+on:
+  schedule:
+    - cron: "40 6 * * 1"   # poniedziałek 6:40 UTC, po codziennym zbieraniu cen
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: data-write
+  cancel-in-progress: false
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - name: Nowe posty z Reddita (tylko brakujące miesiące)
+        continue-on-error: true   # bez świeżych postów ranking i tak powstanie
+        timeout-minutes: 20
+        run: python scripts/collect_reddit.py
+      - name: Test na historii, model i ranking
+        run: python scripts/evaluate.py
+      - name: Zapisz w repo
+        run: |
+          git config user.name "pokescout-bot"
+          git config user.email "pokescout-bot@users.noreply.github.com"
+          git add data/buzz reports
+          git diff --cached --quiet && exit 0
+          git commit -m "Ranking $(date -u +%F)"
+          git pull --rebase origin "$GITHUB_REF_NAME"
+          git push origin HEAD:"$GITHUB_REF_NAME"
