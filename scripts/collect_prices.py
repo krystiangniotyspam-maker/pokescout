@@ -128,4 +128,10 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except Exception as e:  # komunikat jako adnotacja GitHub Actions – widać go bez otwierania logu
+        import traceback
+        tb = traceback.format_exc().strip().splitlines()
+        print(f"::error title=collect_prices::{type(e).__name__}: {e} | {' / '.join(tb[-4:])}")
+        raise
