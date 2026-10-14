@@ -1,0 +1,19 @@
+name: Diagnoza Cardmarket (tymczasowe)
+on:
+  push:
+    branches: [more-signals]
+    paths: [".github/workflows/probe-cardmarket.yml"]
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          for f in priceGuide/price_guide_6.json productList/products_singles_6.json productList/products_nonsingles_6.json; do
+            code=$(curl -sS -o out.json -w "%{http_code}" "https://downloads.s3.cardmarket.com/productCatalog/$f" || true)
+            size=$(stat -c %s out.json 2>/dev/null || echo 0)
+            head=$(head -c 600 out.json | tr '\n"' ' ' | tr -d "'")
+            echo "::notice title=$f::HTTP $code, $size B: $head"
+            if [ "$code" = 200 ]; then python3 -c "
+          import json;d=json.load(open('out.json'));k=[x for x in d if isinstance(d[x],list)];print('::notice title=keys $f::',list(d)[:6],[(x,len(d[x])) for x in k]);x=d[k[0]];print('::notice title=sample $f::',json.dumps(x[:2])[:900])
+          "; fi
+          done
