@@ -6,9 +6,6 @@ on:
       start:
         description: "Od (RRRR-MM-DD), gdy brak zapisanych postów"
         default: "2024-01-01"
-  push:                     # tymczasowo: pierwszy import z gałęzi roboczej (usunąć przed scaleniem)
-    branches: [tcgcsv-history]
-    paths: [".github/workflows/reddit.yml"]
 
 permissions:
   contents: write
