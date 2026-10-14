@@ -8,20 +8,9 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 5
     steps:
-      - name: Zapytania z różnymi nagłówkami
+      - name: Pełna treść odpowiedzi
         run: |
-          for d in 2024-02-08 2025-06-01 2026-10-12; do
-            u="https://tcgcsv.com/archive/tcgplayer/prices-$d.ppmd.7z"
-            for ua in "curl/8.5.0" "PokeScout/0.2 (+https://github.com/krystiangniotyspam-maker/pokescout)" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36"; do
-              r=$(curl -sS -A "$ua" -r 0-99 -o /tmp/body -w "%{http_code} %{size_download} %{content_type}" "$u" || true)
-              echo "::notice title=$d::UA=${ua:0:20} -> $r | $(head -c 150 /tmp/body | tr -dc '[:print:]')"
-            done
-          done
-          h=$(curl -sS -I "https://tcgcsv.com/archive/tcgplayer/prices-2025-06-01.ppmd.7z" | tr '\r\n' '  ' | cut -c1-900)
-          echo "::notice title=headers::$h"
-          r=$(curl -sS -o /dev/null -w "%{http_code}" https://tcgcsv.com/tcgplayer/3/groups)
-          echo "::notice title=api::groups -> $r"
-          h=$(curl -sS https://tcgcsv.com/archive/ | head -c 600 | tr -dc '[:print:]')
-          echo "::notice title=archive-index::$h"
+          curl -sS https://tcgcsv.com/archive/tcgplayer/prices-2025-06-01.ppmd.7z -o /tmp/b || true
+          tr -d '\r' < /tmp/b | tr '\n' ' ' | fold -w 240 | while read -r l; do echo "::notice title=body::$l"; done
