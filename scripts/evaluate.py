@@ -18,6 +18,7 @@ sys.path.insert(0, str(ROOT))
 from pokescout.buzz import buzz_features, load_reddit  # noqa: E402
 from pokescout.data import load_repo_history  # noqa: E402
 from pokescout.tiers import pokemon_key  # noqa: E402
+from pokescout.tcgcsv import CHASE_RARITIES  # noqa: E402
 from pokescout.evaluate import (FEATURES, HORIZONS, build_panel, combo_score, evaluate_scores,  # noqa: E402
                                 fit_latest, walk_forward)
 
@@ -25,6 +26,7 @@ REPORTS = ROOT / "reports"
 TOP_K = 20
 UP = "model: szansa na wzrost o 50%+"
 MAIN = "ranking: szansa na +50% + model zwrotu"  # główny ranking: największy wzrost w perspektywie roku
+PER_SET = 3
 MIN_INVEST = 20.0  # USD – ranking i kontrola na żywo tylko dla kart, na których koszty nie zjadają zysku
 
 
@@ -105,6 +107,12 @@ def main() -> int:
     print(f"Posty z Reddita: {len(posts)}")
     low, *_ = load_repo_history(a.data, price_col="low")
     panel = build_panel(prices, metas, sealed, buzz=buzz, low_prices=low)
+    # Karty spoza rzadkości „chase” są w katalogu tylko dlatego, że DZIŚ kosztują $10+ (wybór
+    # znający przyszłość), więc ich wyniki zawyżałyby test – nie uczymy na nich i nie oceniamy ich.
+    # Do bieżącego rankingu trafiają normalnie.
+    biased = ~panel.card_id.map(lambda c: metas[c].rarity.strip().lower() in CHASE_RARITIES)
+    outcome = [c for c in panel.columns if c.split("_")[0] in ("fwd", "ex", "exn", "net")]
+    panel.loc[biased, outcome] = np.nan
     print(f"Panel: {len(panel)} wierszy, {panel.date.nunique()} dat, {panel.card_id.nunique()} kart")
     reports.mkdir(exist_ok=True)
 
@@ -119,6 +127,13 @@ def main() -> int:
              "`top_up50` = jaki odsetek z nich zdrożał o 50% lub więcej.", ""]
 
     combo = combo_score(panel)
+    cache: dict = {}
+
+    def wf(h_, **kw):  # wyniki modeli dla 6 i 12 mies. są te same (uczone na 6 mies.) – liczymy raz
+        key = (h_, tuple(sorted(kw.items())))
+        if key not in cache:
+            cache[key] = walk_forward(panel, h_, **kw)
+        return cache[key]
     panel["combo"] = combo
     for h in HORIZONS:
         y = f"ex_{h}"
@@ -132,12 +147,12 @@ def main() -> int:
         # przy 12 mies. za mało dat, by uczyć na wynikach rocznych: modele uczone na 6 mies.
         # (bez zaglądania w przyszłość – walk_forward bierze tylko wyniki znane w dniu decyzji)
         mh = min(h, 6)
-        scores["model: gradient boosting"] = walk_forward(panel, mh, model="gbm")
-        scores["model: ridge na rangach"] = walk_forward(panel, mh, model="ridge")
-        scores["model: gradient boosting, cel zysk netto"] = walk_forward(panel, mh, model="gbm", target="exn")
+        scores["model: gradient boosting"] = wf(mh, model="gbm")
+        scores["model: ridge na rangach"] = wf(mh, model="ridge")
+        scores["model: gradient boosting, cel zysk netto"] = wf(mh, model="gbm", target="exn")
         rk = lambda x: x.groupby(panel.date).rank(pct=True)
         scores["łącznie: model + ocena C"] = rk(scores["model: gradient boosting"]) + rk(combo)
-        scores[UP] = walk_forward(panel, mh, target="up50")
+        scores[UP] = wf(mh, target="up50")
         scores[MAIN] = rk(scores[UP]) + rk(scores["model: gradient boosting"])
         res = evaluate_scores(panel, scores, h, top_k=TOP_K)
         res.to_csv(reports / f"evaluation_{h}m.csv", index=False)
@@ -179,12 +194,16 @@ def main() -> int:
     now["score"] = (inv["szansa_50"].rank(pct=True) + inv["model_6m"].rank(pct=True)) / 2
     cols = ["card_id", "name", "set_name", "price_now", "score", "szansa_50", "model_6m", "combo", "spread", "poke_pop",
             "rv_z", "weeks_since_low", "buzz_share", "model_net_6m"]
-    rank = now[now.price_now >= MIN_INVEST].sort_values("score", ascending=False)[cols]
+    rank = now[now.price_now >= MIN_INVEST].sort_values("score", ascending=False)
+    # najwyżej 3 karty z jednego setu w czołówce: w teście ten sam zysk, a mniejsze ryzyko jednego setu
+    first = rank.groupby("set_id").cumcount() < PER_SET
+    rank = pd.concat([rank[first], rank[~first]])[cols]
     rank.to_csv(reports / "ranking.csv", index=False)
     lines += ["## Bieżący ranking modelu (6 mies., karty od $20)", "",
               f"Stan na {panel.date.max():%Y-%m-%d}. Kolejność wg `score` (0–1, wyżej = lepiej) = średnia rang modelu "
               "szukającego kart, które zdrożeją o 50%+ (`szansa_50`), i modelu zwrotu (`model_6m`); "
-              "w teście ta para najlepiej wybierała karty na rok (sekcja 12 mies.). `szansa_50` porządkuje karty, ale nie jest prawdziwym "
+              "w teście ta para najlepiej wybierała karty na rok (sekcja 12 mies.). Z jednego setu najwyżej "
+              f"{PER_SET} karty na początku listy, kolejne trafiają niżej. `szansa_50` porządkuje karty, ale nie jest prawdziwym "
               "prawdopodobieństwem – faktyczny odsetek wzrostów o 50%+ zależy głównie od stanu całego rynku. "
               "`model_6m` = przewidywany log-zwrot ponad rynek w 6 mies. "
               "(0,20 ≈ +22%), `model_net_6m` = to samo po kosztach, "
