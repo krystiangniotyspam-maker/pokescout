@@ -12,13 +12,11 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Wydania i układ repo
+      - name: Kandydaci
         run: |
-          R=sodennis/cardarchive-tcgcsv
-          n=$(gh api "repos/$R/releases?per_page=1" -i | grep -i '^link:' | tr ',' '\n' | grep last | cut -c1-200)
-          echo "::notice title=pages::$n"
-          gh api "repos/$R/releases?per_page=5" --jq '.[] | "\(.tag_name) | \(.name) | \([.assets[] | "\(.name):\(.size)"] | join(", "))"' | cut -c1-600 | while read -r l; do echo "::notice title=newest::$l"; done
-          gh api "repos/$R/releases?per_page=100&page=8" --jq '.[] | "\(.tag_name) | \([.assets[] | "\(.name):\(.size)"] | join(", "))"' | head -5 | cut -c1-600 | while read -r l; do echo "::notice title=page8::$l"; done
-          gh api "repos/$R/releases/tags/2024-02-08" --jq '"\(.tag_name) | \([.assets[] | "\(.name):\(.size) \(.browser_download_url)"] | join(", "))"' 2>&1 | cut -c1-700 | while read -r l; do echo "::notice title=tag20240208::$l"; done
-          gh api "repos/$R/contents/data" --jq '.[] | "\(.name) \(.type) \(.size)"' 2>&1 | head -8 | while read -r l; do echo "::notice title=data::$l"; done
-          gh api "repos/$R/git/trees/HEAD?recursive=0" --jq '.tree[] | .path' | head -20 | tr '\n' ' ' | while read -r l; do echo "::notice title=tree::$l"; done
+          for R in sodennis/cardarchive-tcgcsv landonrroy/pokefolio-data Tbaker-maker/Catchem-data RubyCollecting/cardvault-data brentsharon/pokesave-data tcgdex/price-history; do
+            info=$(gh api "repos/$R" --jq '"size=\(.size)KB pushed=\(.pushed_at) branch=\(.default_branch) desc=\(.description)"' 2>&1 | head -c 250)
+            rel=$(gh api "repos/$R/releases?per_page=3" --jq '[.[] | "\(.tag_name)[\([.assets[].name] | join("+"))]"] | join(" ")' 2>&1 | head -c 250)
+            tree=$(gh api "repos/$R/contents" --jq '[.[] | .name] | join(" ")' 2>&1 | head -c 250)
+            echo "::notice title=$R::$info | releases: $rel | root: $tree"
+          done
