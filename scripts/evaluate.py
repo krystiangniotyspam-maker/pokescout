@@ -36,6 +36,23 @@ def fmt(df: pd.DataFrame) -> str:
     return d.to_markdown(index=False)
 
 
+def market_section(panel: pd.DataFrame) -> list[str]:
+    """Kiedy kupować: tempo całego rynku (mediana trendów kart) a późniejszy zwrot mediany rynku."""
+    idx = panel.groupby("date").agg(trend_90=("slope_90", "median"), trend_180=("slope_180", "median"),
+                                    zwrot_3m=("fwd_3", "median"), zwrot_6m=("fwd_6", "median"))
+    corr = idx.corr(method="spearman").loc[["trend_90", "trend_180"], ["zwrot_3m", "zwrot_6m"]]
+    now = idx.iloc[-1]
+    pct = lambda c: (idx[c] <= now[c]).mean()
+    return ["## Rynek: kiedy kupować", "",
+            "Trend rynku = mediana trendów cen wszystkich kart (%/mies.). Na historii szybki wzrost rynku "
+            "zapowiadał słabsze kolejne miesiące, a spokojny lub spadający rynek – lepsze (korelacja rang poniżej; "
+            "to tylko ok. 2 cykle, więc traktuj orientacyjnie).", "",
+            corr.round(2).to_markdown(), "",
+            f"Teraz ({idx.index[-1]:%Y-%m-%d}): trend 90 dni {now.trend_90:+.1%}/mies. "
+            f"(wyżej niż w {pct('trend_90'):.0%} historii), trend 180 dni {now.trend_180:+.1%}/mies. "
+            f"(wyżej niż w {pct('trend_180'):.0%} historii).", ""]
+
+
 def track_live(panel: pd.DataFrame, rank: pd.DataFrame, reports: Path) -> list[str]:
     """Kontrola na żywo: zapisuje top-20 z każdego dnia rankingu i rozlicza je, gdy minie horyzont.
 
@@ -46,7 +63,7 @@ def track_live(panel: pd.DataFrame, rank: pd.DataFrame, reports: Path) -> list[s
     today = panel.date.max()
     if log.empty or today not in set(log.date):
         top = rank.head(TOP_K).assign(date=today, rank=range(1, min(TOP_K, len(rank)) + 1))
-        new = top[["date", "rank", "card_id", "name", "price_now", "model_net_6m"]]
+        new = top[["date", "rank", "card_id", "name", "price_now", "model_6m", "combo"]]
         log = pd.concat([log, new], ignore_index=True) if len(log) else new
         log.to_csv(log_f, index=False)
     lines = ["## Kontrola na żywo", "",
@@ -111,6 +128,8 @@ def main() -> int:
         scores["model: gradient boosting"] = walk_forward(panel, h, model="gbm")
         scores["model: ridge na rangach"] = walk_forward(panel, h, model="ridge")
         scores["model: gradient boosting, cel zysk netto"] = walk_forward(panel, h, model="gbm", target="exn")
+        rk = lambda x: x.groupby(panel.date).rank(pct=True)
+        scores["łącznie: model + ocena C"] = rk(scores["model: gradient boosting"]) + rk(combo)
         res = evaluate_scores(panel, scores, h, top_k=TOP_K)
         res.to_csv(reports / f"evaluation_{h}m.csv", index=False)
 
@@ -121,7 +140,7 @@ def main() -> int:
                   f"{len(gated)} obserwacji, średni zwrot ponad rynek "
                   f"{np.expm1(gated[y].mean()) if len(gated) else float('nan'):+.1%}.", "",
                   fmt(res), ""]
-        main_inv = ["model: gradient boosting", "model: gradient boosting, cel zysk netto",
+        main_inv = ["łącznie: model + ocena C", "model: gradient boosting", "model: gradient boosting, cel zysk netto",
                     "ocena C: popularność + wiek + tania + dno", "reguły: moduł B1 (tania vs podobne)",
                     "reguły: moduł A (ocena bez bramek)"]
         inv = evaluate_scores(panel, {k: scores[k] for k in main_inv}, h, top_k=TOP_K, min_price=MIN_INVEST)
@@ -129,7 +148,7 @@ def main() -> int:
         if h <= 6:  # czy sygnał działa w obu połowach okresu (inny stan rynku)
             dates = sorted(known.date.unique())
             mid = dates[len(dates) // 2]
-            main = ["ocena C: popularność + wiek + tania + dno", "reguły: moduł A (ocena bez bramek)",
+            main = ["łącznie: model + ocena C", "ocena C: popularność + wiek + tania + dno", "reguły: moduł A (ocena bez bramek)",
                     "reguły: moduł B1 (tania vs podobne)", "cecha: weeks_since_low", "cecha: −drawdown",
                     "model: gradient boosting"]
             rows = []
@@ -145,15 +164,19 @@ def main() -> int:
     now = panel[panel.date == panel.date.max()].copy()
     now["model_6m"] = model.predict(now[FEATURES])
     now["model_net_6m"] = model_net.predict(now[FEATURES])
+    inv = now[now.price_now >= MIN_INVEST]
+    now["score"] = (inv["model_6m"].rank(pct=True) + inv["combo"].rank(pct=True)) / 2
     cols = ["card_id", "name", "set_name", "price_now", "spread", "poke_pop", "rv_z", "weeks_since_low",
-            "buzz_share", "combo", "model_6m", "model_net_6m"]
-    rank = now[now.price_now >= MIN_INVEST].sort_values("model_net_6m", ascending=False)[cols]
+            "buzz_share", "combo", "model_6m", "model_net_6m", "score"]
+    rank = now[now.price_now >= MIN_INVEST].sort_values("score", ascending=False)[cols]
     rank.to_csv(reports / "ranking.csv", index=False)
     lines += ["## Bieżący ranking modelu (6 mies., karty od $20)", "",
-              f"Stan na {panel.date.max():%Y-%m-%d}. `model_net_6m` = przewidywany zwrot netto ponad rynek "
-              "w 6 mies. (log, 0,20 ≈ +22%), `model_6m` = to samo bez kosztów, `combo` = ocena C, "
+              f"Stan na {panel.date.max():%Y-%m-%d}. Kolejność wg `score` = średnia rang modelu (`model_6m`) "
+              "i oceny C (`combo`), 1 = najlepsza. `model_6m` = przewidywany log-zwrot ponad rynek w 6 mies. "
+              "(0,20 ≈ +22%), `model_net_6m` = to samo po kosztach, "
               "`spread` = log(cena rynkowa / najniższa oferta). To lista do sprawdzenia, nie rekomendacja zakupu.", "",
               rank.drop(columns="card_id").head(25).to_markdown(index=False, floatfmt=".2f"), ""]
+    lines += market_section(panel)
     lines += track_live(panel, rank, reports)
     (reports / "evaluation.md").write_text("\n".join(lines))
     print("\n".join(lines))
