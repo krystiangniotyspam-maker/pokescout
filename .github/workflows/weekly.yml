@@ -29,13 +29,17 @@ jobs:
         continue-on-error: true   # bez świeżych postów ranking i tak powstanie
         timeout-minutes: 20
         run: python scripts/collect_reddit.py
+      - name: Ceny z Cardmarket (EUR)
+        continue-on-error: true
+        timeout-minutes: 10
+        run: python scripts/collect_cardmarket.py
       - name: Test na historii, model i ranking
         run: python scripts/evaluate.py
       - name: Zapisz w repo
         run: |
           git config user.name "pokescout-bot"
           git config user.email "pokescout-bot@users.noreply.github.com"
-          git add data/buzz reports
+          git add data/buzz data/cardmarket reports
           git diff --cached --quiet && exit 0
           git commit -m "Ranking $(date -u +%F)"
           git pull --rebase -X theirs origin "$GITHUB_REF_NAME"   # przy kolizji wygrywają świeżo pobrane pliki

@@ -152,32 +152,43 @@ def combo_score(panel: pd.DataFrame) -> pd.Series:
 
 
 def walk_forward(panel: pd.DataFrame, horizon: int, min_train_dates: int = 6, model: str = "gbm",
-                 target: str = "ex") -> pd.Series:
+                 target: str = "ex", refit_every: int = 2) -> pd.Series:
     """Ocena modelu dla każdej daty, uczonego tylko na wynikach znanych w tej dacie.
 
     target: "ex" – log-zwrot ponad rynek, "exn" – zwrot netto po kosztach ponad rynek,
-            "up50" – szansa, że cena wzrośnie o co najmniej 50% (model klasyfikacyjny)."""
+            "up50" – szansa, że cena wzrośnie o co najmniej 50% (model klasyfikacyjny).
+    Model uczymy od nowa, gdy przybędzie `refit_every` dat z wynikiem (szybciej, nadal bez
+    zaglądania w przyszłość – starszy model zna mniej, nigdy więcej)."""
     from sklearn.linear_model import Ridge
 
     y_col = f"fwd_{horizon}" if target == "up50" else f"{target}_{horizon}"
     out = pd.Series(np.nan, index=panel.index)
     dates = sorted(panel["date"].unique())
+    m, fitted_on = None, 0
+
+    def ranks(df_):  # ridge na rangach cech (odporny na wartości skrajne, braki = środek)
+        return df_.groupby(panel.loc[df_.index, "date"]).rank(pct=True).fillna(0.5) - 0.5
+
     for d in dates:
         known = panel["date"] + pd.DateOffset(months=horizon) <= d
         train = panel[known & panel[y_col].notna()]
-        if train["date"].nunique() < min_train_dates:
+        n = train["date"].nunique()
+        if n < min_train_dates:
             continue
+        if m is None or n - fitted_on >= refit_every:
+            X = train[FEATURES]
+            if target == "up50" or model == "gbm":
+                m = _gbm(target).fit(X, _target(train, horizon, target))
+            else:
+                m = Ridge(alpha=10.0).fit(ranks(X), _target(train, horizon, target))
+            fitted_on = n
         test = panel["date"] == d
-        X, Xt = train[FEATURES], panel.loc[test, FEATURES]
-        y = train[y_col].clip(-1.5, 1.5)  # pojedyncze skoki x5 nie mogą dominować nauki
+        Xt = panel.loc[test, FEATURES]
         if target == "up50":
-            out[test] = _gbm(target).fit(X, _target(train, horizon, target)).predict_proba(Xt)[:, 1]
+            out[test] = m.predict_proba(Xt)[:, 1]
         elif model == "gbm":
-            out[test] = _gbm(target).fit(X, y).predict(Xt)
-        else:  # ridge na rangach cech (odporny na wartości skrajne, braki = środek)
-            def ranks(df_):
-                return df_.groupby(panel.loc[df_.index, "date"]).rank(pct=True).fillna(0.5) - 0.5
-            m = Ridge(alpha=10.0).fit(ranks(X), y)
+            out[test] = m.predict(Xt)
+        else:
             out[test] = m.predict(ranks(Xt))
     return out
 
