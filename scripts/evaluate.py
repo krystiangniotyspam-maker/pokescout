@@ -15,7 +15,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from pokescout.buzz import buzz_features, load_reddit  # noqa: E402
+from pokescout.buzz import buzz_features, load_reddit, reprint_mentions  # noqa: E402
 from pokescout.data import load_repo_history  # noqa: E402
 from pokescout.tiers import pokemon_key  # noqa: E402
 from pokescout import sealed  # noqa: E402
@@ -58,11 +58,12 @@ def market_section(panel: pd.DataFrame) -> list[str]:
             f"(wyżej niż w {pct('trend_180'):.0%} historii).", ""]
 
 
-def sealed_section(data_dir: str, reports: Path) -> list[str]:
+def sealed_section(data_dir: str, reports: Path, reprints: pd.Series) -> list[str]:
     prices, cat = sealed.load_sealed_weekly(data_dir)
     if prices.empty:
         return []
     rank = sealed.add_cardmarket(sealed.ranking(prices, cat, min_price=MIN_INVEST), data_dir)
+    rank["dodruk_posty"] = rank.product_id.map(cat.group_id).astype(str).map(reprints).fillna(0).astype(int)
     rank.to_csv(reports / "sealed_ranking.csv", index=False)
     return ["## Produkty zamknięte (booster box, ETB, bundle)", "",
             "Ocena = ranga typu produktu (ETB i booster bundle wyżej) + bliskość wieku 1,5 roku od premiery "
@@ -206,9 +207,12 @@ def main() -> int:
     now["model_6m"] = model.predict(now[FEATURES])
     now["model_net_6m"] = model_net.predict(now[FEATURES])
     now["szansa_50"] = model_up.predict_proba(now[FEATURES])[:, 1]
+    rp = reprint_mentions(posts, pd.read_csv(Path(a.data) / "catalog" / "sets.csv"))
+    rp = rp[rp.date == rp.date.max()].set_index("set_id").reprint_posts if len(rp) else pd.Series(dtype=float)
+    now["dodruk_posty"] = now.set_id.astype(str).map(rp).fillna(0).astype(int)
     inv = now[now.price_now >= MIN_INVEST]
     now["score"] = (inv["szansa_50"].rank(pct=True) + inv["model_6m"].rank(pct=True)) / 2
-    cols = ["card_id", "name", "set_name", "price_now", "score", "szansa_50", "model_6m", "combo", "spread", "poke_pop",
+    cols = ["card_id", "name", "set_name", "price_now", "score", "dodruk_posty", "szansa_50", "model_6m", "combo", "spread", "poke_pop",
             "rv_z", "weeks_since_low", "buzz_share", "model_net_6m"]
     rank = now[now.price_now >= MIN_INVEST].sort_values("score", ascending=False)
     # najwyżej 3 karty z jednego setu w czołówce: w teście ten sam zysk, a mniejsze ryzyko jednego setu
@@ -223,10 +227,22 @@ def main() -> int:
               "prawdopodobieństwem – faktyczny odsetek wzrostów o 50%+ zależy głównie od stanu całego rynku. "
               "`model_6m` = przewidywany log-zwrot ponad rynek w 6 mies. "
               "(0,20 ≈ +22%), `model_net_6m` = to samo po kosztach, "
-              "`spread` = log(cena rynkowa / najniższa oferta). To lista do sprawdzenia, nie rekomendacja zakupu.", "",
+              "`spread` = log(cena rynkowa / najniższa oferta), `dodruk_posty` = posty o dodruku setu na Reddicie "
+              "w ostatnich 8 tyg. (3+ = ostrożnie: na historii takie karty wypadały ok. 14% gorzej od rynku w 6 mies.). To lista do sprawdzenia, nie rekomendacja zakupu.", "",
               rank.drop(columns="card_id").head(25).to_markdown(index=False, floatfmt=".2f"), ""]
+    # tanie karty ($5–20): w teście 10 najwyżej ocenionych podwajało się w rok w ok. połowie przypadków
+    cheap = now[now.price_now.between(5, MIN_INVEST, inclusive="left")].copy()
+    cheap["score"] = (cheap["szansa_50"].rank(pct=True) + cheap["model_6m"].rank(pct=True)) / 2
+    cheap = cheap.sort_values("score", ascending=False)
+    first = cheap.groupby("set_id").cumcount() < PER_SET
+    cheap = pd.concat([cheap[first], cheap[~first]])[cols]
+    cheap.to_csv(reports / "ranking_tanie.csv", index=False)
+    lines += [f"## Tanie karty ($5–{MIN_INVEST:.0f})", "",
+              "Ta sama ocena co wyżej, dla tańszych kart (pełna lista w `reports/ranking_tanie.csv`). "
+              "Przy takich kwotach wysyłka zjada dużą część zysku, więc to raczej lista na lata niż na szybki obrót.", "",
+              cheap.drop(columns="card_id").head(20).to_markdown(index=False, floatfmt=".2f"), ""]
     lines += market_section(panel)
-    lines += sealed_section(a.data, reports)
+    lines += sealed_section(a.data, reports, rp)
     lines += track_live(panel, rank, reports)
     (reports / "evaluation.md").write_text("\n".join(lines))
     print("\n".join(lines))
