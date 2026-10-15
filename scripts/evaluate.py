@@ -43,6 +43,56 @@ def fmt(df: pd.DataFrame) -> str:
     return d.to_markdown(index=False)
 
 
+POT_BINS = [0.0, 0.5, 0.8, 0.9, 0.95, 1.0]  # przedziały pozycji w rankingu (1 = najlepsza)
+
+
+def potential_table(panel: pd.DataFrame, score: pd.Series) -> pd.DataFrame:
+    """Jak w historii rosły w rok karty od $MIN_CARD zależnie od pozycji w rankingu w dniu decyzji.
+
+    Pozycja = percentyl oceny wśród kart od $MIN_CARD tego dnia. Zwraca medianę i 25./75. percentyl
+    zwrotu za 12 mies. dla każdego przedziału – z tego bierze się „potencjał” przy bieżących kartach."""
+    df = panel.assign(_s=score)[["date", "_s", "fwd_12", "price_now"]].dropna()
+    df = df[df.price_now >= MIN_CARD]
+    if df.empty:
+        return pd.DataFrame()
+    df["pct"] = df.groupby("date")["_s"].rank(pct=True)
+    df["bin"] = pd.cut(df.pct, POT_BINS, include_lowest=True)
+    ret = np.expm1(df.fwd_12)
+    return ret.groupby(df["bin"], observed=True).agg(
+        mediana="median", p25=lambda x: x.quantile(0.25), p75=lambda x: x.quantile(0.75), obs="size")
+
+
+def potential_for(pct: pd.Series, table: pd.DataFrame) -> pd.DataFrame:
+    if table is None or table.empty:
+        return pd.DataFrame(index=pct.index)
+    b = pd.cut(pct, POT_BINS, include_lowest=True)
+    return pd.DataFrame({"potencjal_rok": b.map(table["mediana"]).astype(float),
+                         "potencjal_od": b.map(table["p25"]).astype(float),
+                         "potencjal_do": b.map(table["p75"]).astype(float)}, index=pct.index)
+
+
+REASONS = [  # (cecha, kierunek, opis) – czytelne powody przy karcie; to cechy, które model ceni, nie dokładny rozkład
+    ("poke_pop", 1, "popularny Pokémon"),
+    ("rv_z", -1, "tańsza niż podobne karty"),
+    ("buzz_share", 1, "dużo rozmów na forach"),
+    ("weeks_since_low", 1, "dawno po dołku cenowym"),
+    ("age_months", 1, "starszy set"),
+    ("tier_score", 1, "rzadka, efektowna wersja"),
+    ("set_trend_90", 1, "cały set drożeje"),
+    ("sealed_slope_90", 1, "boxy z tego setu drożeją"),
+    ("spread", -1, "łatwo kupić i sprzedać"),
+]
+
+
+def reasons(df: pd.DataFrame, top: int = 3) -> pd.Series:
+    """Do 3 najmocniejszych powodów: cechy, w których karta jest w górnych 30% swojej listy."""
+    pct = pd.DataFrame({desc: (sign * df[c]).rank(pct=True) for c, sign, desc in REASONS if c in df})
+    def pick(row):
+        best = row[row >= 0.7].sort_values(ascending=False).head(top)
+        return ", ".join(best.index) if len(best) else "ogólnie wysoka ocena modelu"
+    return pct.apply(pick, axis=1)
+
+
 def market_section(panel: pd.DataFrame, reports: Path) -> list[str]:
     """Kiedy kupować: tempo całego rynku (mediana trendów kart) a późniejszy zwrot mediany rynku."""
     idx = panel.groupby("date").agg(trend_90=("slope_90", "median"), trend_180=("slope_180", "median"),
@@ -149,6 +199,7 @@ def main() -> int:
              "`top_up50` = jaki odsetek z nich zdrożał o 50% lub więcej.", ""]
 
     combo = combo_score(panel)
+    potential = None
     cache: dict = {}
 
     def wf(h_, **kw):  # wyniki modeli dla 6 i 12 mies. są te same (uczone na 6 mies.) – liczymy raz
@@ -177,6 +228,8 @@ def main() -> int:
         scores[UP] = wf(mh, target="up50")
         scores[MAIN] = rk(scores[UP]) + rk(scores["model: gradient boosting"])
         res = evaluate_scores(panel, scores, h, top_k=TOP_K)
+        if h == 12:
+            potential = potential_table(panel, scores[MAIN])
         res.to_csv(reports / f"evaluation_{h}m.csv", index=False)
 
         known = panel[panel[y].notna()]
@@ -217,9 +270,12 @@ def main() -> int:
     now["dodruk_posty"] = now.set_id.astype(str).map(rp).fillna(0).astype(int)
     inv = now[now.price_now >= MIN_CARD]
     now["score"] = (inv["szansa_50"].rank(pct=True) + inv["model_6m"].rank(pct=True)) / 2
-    cols = ["card_id", "name", "set_name", "price_now", "score", "dodruk_posty", "szansa_50", "model_6m", "combo", "spread", "poke_pop",
+    cols = ["card_id", "name", "set_name", "price_now", "score", "potencjal_rok", "potencjal_od", "potencjal_do",
+            "dodruk_posty", "dlaczego", "szansa_50", "model_6m", "combo", "spread", "poke_pop",
             "rv_z", "weeks_since_low", "buzz_share", "model_net_6m"]
+    now = now.join(potential_for(now["score"], potential))
     rank = now[now.price_now >= MIN_CARD].sort_values("score", ascending=False)
+    rank["dlaczego"] = reasons(rank)
     # najwyżej 3 karty z jednego setu w czołówce: w teście ten sam zysk, a mniejsze ryzyko jednego setu
     first = rank.groupby("set_id").cumcount() < PER_SET
     rank = pd.concat([rank[first], rank[~first]])[cols]
@@ -238,6 +294,8 @@ def main() -> int:
     # tanie karty ($5–20): w teście 10 najwyżej ocenionych podwajało się w rok w ok. połowie przypadków
     cheap = now[now.price_now.between(5, MIN_CARD, inclusive="left")].copy()
     cheap["score"] = (cheap["szansa_50"].rank(pct=True) + cheap["model_6m"].rank(pct=True)) / 2
+    cheap.update(potential_for(cheap["score"], potential))
+    cheap["dlaczego"] = reasons(cheap)
     cheap = cheap.sort_values("score", ascending=False)
     first = cheap.groupby("set_id").cumcount() < PER_SET
     cheap = pd.concat([cheap[first], cheap[~first]])[cols]

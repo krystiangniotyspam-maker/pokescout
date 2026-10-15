@@ -38,13 +38,31 @@ def _cm_link(query: str) -> str:
     return f"https://www.cardmarket.com/en/Pokemon/Products/Search?searchString={quote_plus(query)}"
 
 
-def _card_line(i: int, r, rarity: dict) -> str:
+def _card_line(i: int, r, rarity: dict, show_pot: bool = True) -> str:
     rar = RARITY_SHORT.get(str(rarity.get(r.card_id, "")).lower(), "")
     name = f"{r['name']} {rar}".strip()
     base = str(r["name"]).split(" - ")[0].split(" (")[0]
     warn = " ⚠️ dodruk" if r.get("dodruk_posty", 0) >= 3 else ""
-    return (f"{i}. **[{name}](https://www.tcgplayer.com/product/{r.card_id})** · {_set(r.set_name)} · "
+    line = (f"{i}. **[{name}](https://www.tcgplayer.com/product/{r.card_id})** · {_set(r.set_name)} · "
             f"${r.price_now:.0f} · [Cardmarket]({_cm_link(base)}){warn}")
+    extra = []
+    if pd.notna(r.get("potencjal_rok")) and show_pot:
+        extra.append(f"📈 ok. {r.potencjal_rok:+.0%} w rok (zwykle {r.potencjal_od:+.0%} do {r.potencjal_do:+.0%})")
+    if isinstance(r.get("dlaczego"), str):
+        extra.append(r.dlaczego)
+    return line + ("\n   " + " · ".join(extra) if extra else "")
+
+
+def _section(title: str, df: pd.DataFrame, rarity: dict) -> list[str]:
+    """Nagłówek z potencjałem, gdy jest wspólny dla całej sekcji; inaczej potencjał przy każdej karcie."""
+    pot = df["potencjal_rok"].dropna().round(2).unique() if "potencjal_rok" in df else []
+    common = len(pot) == 1 and df["potencjal_rok"].notna().all()
+    if common:
+        r0 = df.iloc[0]
+        title += (f"\n📈 takie karty rosły w rok średnio ok. {r0.potencjal_rok:+.0%} "
+                  f"(zwykle {r0.potencjal_od:+.0%} do {r0.potencjal_do:+.0%})")
+    lines = [_card_line(i, r, rarity, show_pot=not common) for i, (_, r) in enumerate(df.iterrows(), 1)]
+    return [title, *lines, ""]
 
 
 def build() -> str:
@@ -63,14 +81,10 @@ def build() -> str:
                    "🟡 rynek w normie")
         out += [f"**Rynek:** {verdict} (ostatnie 3 mies.: {t:+.1%}/mies.)", ""]
     if len(cards):
-        out += ["🔥 **Karty na lata – top 8** (od $50)"]
-        out += [_card_line(i, r, rarity) for i, (_, r) in enumerate(cards.head(8).iterrows(), 1)]
-        out += [""]
+        out += _section("🔥 **Karty na lata – top 8** (od $50)", cards.head(8), rarity)
     gems = cheap[cheap.price_now >= 15] if len(cheap) else cheap
     if len(gems):
-        out += ["💎 **Tańsze perełki – top 3** ($15–50, najwyżej ocenione przez model)"]
-        out += [_card_line(i, r, rarity) for i, (_, r) in enumerate(gems.head(3).iterrows(), 1)]
-        out += [""]
+        out += _section("💎 **Tańsze perełki – top 3** ($15–50)", gems.head(3), rarity)
     if len(box):
         out += ["📦 **Boxy i ETB – top 3**"]
         for i, (_, r) in enumerate(box.head(3).iterrows(), 1):
@@ -79,7 +93,9 @@ def build() -> str:
             out.append(f"{i}. **[{r['name']}](https://www.tcgplayer.com/product/{r.product_id})** · "
                        f"${r.price_now:.0f}{eur} · [Cardmarket]({_cm_link(r['name'])}){warn}")
         out += [""]
-    out += ["Kupuj kilka pozycji, nie jedną; trzymaj ok. roku. ⚠️ dodruk = dużo postów o dodruku setu.",
+    out += ["📈 = jak w latach 2025–26 rosły w rok karty równie wysoko w rankingu (mocny rynek – w słabszym roku "
+            "mniej; dłużej niż rok nie da się jeszcze sprawdzić).",
+            "Kupuj kilka pozycji, nie jedną. ⚠️ dodruk = dużo postów o dodruku setu.",
             f"Pełne listy: {REPO_URL}/ranking.csv · {REPO_URL}/sealed_ranking.csv"]
     return "\n".join(out)
 
