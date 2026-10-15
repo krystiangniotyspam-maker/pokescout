@@ -26,9 +26,9 @@ group_id,set_name,abbreviation,release_date,set_type,supplemental
 23473,SV06: Twilight Masquerade,TWM,2024-05-24,main,False
 23381,SV05: Temporal Forces,TEF,2024-03-22,main,False
 23353,SV: Paldean Fates,PAF,2024-01-26,special,False
-23323,Trading Card Game Classic,CL,2023-11-17,main,False
+23323,Trading Card Game Classic,CL,2023-11-17,promo,False
 23286,SV04: Paradox Rift,PAR,2023-11-03,main,False
-23330,My First Battle,,2023-09-29,main,False
+23330,My First Battle,,2023-09-29,promo,False
 23237,SV: Scarlet & Violet 151,MEW,2023-09-22,special,False
 23306,McDonald's Promos 2023,M23,2023-09-12,promo,False
 23266,Trick or Trade BOOster Bundle 2023,TTBB23,2023-09-01,promo,False
@@ -77,22 +77,22 @@ group_id,set_name,abbreviation,release_date,set_type,supplemental
 2420,SM - Unbroken Bonds,SM10,2019-05-03,main,False
 2409,Detective Pikachu,DEP,2019-04-05,special,False
 2377,SM - Team Up,SM9,2019-02-01,main,False
-1543,EX Trainer Kit 1: Latias & Latios,PR,2026-10-13,main,False
-1542,EX Trainer Kit 2: Plusle & Minun,PR,2026-10-13,main,False
-1423,Nintendo Promos,PR,2026-10-13,promo,False
-1422,POP Series 1,POP,2026-10-13,main,False
-1447,POP Series 2,POP,2026-10-13,main,False
-1442,POP Series 3,POP,2026-10-13,main,False
-1452,POP Series 4,POP,2026-10-13,main,False
-1439,POP Series 5,POP,2026-10-13,main,False
-1432,POP Series 6,POP,2026-10-13,main,False
-1414,POP Series 7,POP,2026-10-13,main,False
-1450,POP Series 8,POP,2026-10-13,main,False
-1446,POP Series 9,POP,2026-10-13,main,False
-1938,Alternate Art Promos,PR,2026-10-13,promo,True
-2289,Blister Exclusives,BLE,2026-10-13,main,True
-2175,Burger King Promos,BKP,2026-10-13,promo,True
-2776,First Partner Pack,FPP,2026-10-13,promo,True
-2374,Miscellaneous Cards & Products,MCAP,2026-10-13,main,True
-2205,Pikachu World Collection Promos,PWCP,2026-10-13,promo,True
-2332,Professor Program Promos,PPP,2026-10-13,promo,True
+1543,EX Trainer Kit 1: Latias & Latios,PR,2026-10-14,main,False
+1542,EX Trainer Kit 2: Plusle & Minun,PR,2026-10-14,main,False
+1423,Nintendo Promos,PR,2026-10-14,promo,False
+1422,POP Series 1,POP,2026-10-14,main,False
+1447,POP Series 2,POP,2026-10-14,main,False
+1442,POP Series 3,POP,2026-10-14,main,False
+1452,POP Series 4,POP,2026-10-14,main,False
+1439,POP Series 5,POP,2026-10-14,main,False
+1432,POP Series 6,POP,2026-10-14,main,False
+1414,POP Series 7,POP,2026-10-14,main,False
+1450,POP Series 8,POP,2026-10-14,main,False
+1446,POP Series 9,POP,2026-10-14,main,False
+1938,Alternate Art Promos,PR,2026-10-14,promo,True
+2289,Blister Exclusives,BLE,2026-10-14,main,True
+2175,Burger King Promos,BKP,2026-10-14,promo,True
+2776,First Partner Pack,FPP,2026-10-14,promo,True
+2374,Miscellaneous Cards & Products,MCAP,2026-10-14,main,True
+2205,Pikachu World Collection Promos,PWCP,2026-10-14,promo,True
+2332,Professor Program Promos,PPP,2026-10-14,promo,True
