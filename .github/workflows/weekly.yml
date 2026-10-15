@@ -35,6 +35,11 @@ jobs:
         run: python scripts/collect_cardmarket.py
       - name: Test na historii, model i ranking
         run: python scripts/evaluate.py
+      - name: Raport tygodnia na Discord
+        continue-on-error: true   # błąd Discorda nie blokuje zapisu rankingu
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        run: python scripts/notify_discord.py
       - name: Zapisz w repo
         run: |
           git config user.name "pokescout-bot"

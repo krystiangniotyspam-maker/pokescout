@@ -6,6 +6,7 @@ Porównuje: obecne reguły (moduł A i B1), pojedyncze cechy i model uczony (wal
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -28,7 +29,8 @@ TOP_K = 20
 UP = "model: szansa na wzrost o 50%+"
 MAIN = "ranking: szansa na +50% + model zwrotu"  # główny ranking: największy wzrost w perspektywie roku
 PER_SET = 3
-MIN_INVEST = 20.0  # USD – ranking i kontrola na żywo tylko dla kart, na których koszty nie zjadają zysku
+MIN_INVEST = 20.0
+MIN_CARD = 50.0  # główny ranking kart: od $50 (tańsze trafiają na listę pomocniczą)  # USD – ranking i kontrola na żywo tylko dla kart, na których koszty nie zjadają zysku
 
 
 def fmt(df: pd.DataFrame) -> str:
@@ -41,13 +43,16 @@ def fmt(df: pd.DataFrame) -> str:
     return d.to_markdown(index=False)
 
 
-def market_section(panel: pd.DataFrame) -> list[str]:
+def market_section(panel: pd.DataFrame, reports: Path) -> list[str]:
     """Kiedy kupować: tempo całego rynku (mediana trendów kart) a późniejszy zwrot mediany rynku."""
     idx = panel.groupby("date").agg(trend_90=("slope_90", "median"), trend_180=("slope_180", "median"),
                                     zwrot_3m=("fwd_3", "median"), zwrot_6m=("fwd_6", "median"))
     corr = idx.corr(method="spearman").loc[["trend_90", "trend_180"], ["zwrot_3m", "zwrot_6m"]]
     now = idx.iloc[-1]
     pct = lambda c: (idx[c] <= now[c]).mean()
+    (reports / "market.json").write_text(json.dumps(
+        {"date": f"{idx.index[-1]:%Y-%m-%d}", "trend_90": round(float(now.trend_90), 4),
+         "pct_90": round(float(pct("trend_90")), 3)}))
     return ["## Rynek: kiedy kupować", "",
             "Trend rynku = mediana trendów cen wszystkich kart (%/mies.). Na historii szybki wzrost rynku "
             "zapowiadał słabsze kolejne miesiące, a spokojny lub spadający rynek – lepsze (korelacja rang poniżej; "
@@ -210,16 +215,16 @@ def main() -> int:
     rp = reprint_mentions(posts, pd.read_csv(Path(a.data) / "catalog" / "sets.csv"))
     rp = rp[rp.date == rp.date.max()].set_index("set_id").reprint_posts if len(rp) else pd.Series(dtype=float)
     now["dodruk_posty"] = now.set_id.astype(str).map(rp).fillna(0).astype(int)
-    inv = now[now.price_now >= MIN_INVEST]
+    inv = now[now.price_now >= MIN_CARD]
     now["score"] = (inv["szansa_50"].rank(pct=True) + inv["model_6m"].rank(pct=True)) / 2
     cols = ["card_id", "name", "set_name", "price_now", "score", "dodruk_posty", "szansa_50", "model_6m", "combo", "spread", "poke_pop",
             "rv_z", "weeks_since_low", "buzz_share", "model_net_6m"]
-    rank = now[now.price_now >= MIN_INVEST].sort_values("score", ascending=False)
+    rank = now[now.price_now >= MIN_CARD].sort_values("score", ascending=False)
     # najwyżej 3 karty z jednego setu w czołówce: w teście ten sam zysk, a mniejsze ryzyko jednego setu
     first = rank.groupby("set_id").cumcount() < PER_SET
     rank = pd.concat([rank[first], rank[~first]])[cols]
     rank.to_csv(reports / "ranking.csv", index=False)
-    lines += ["## Bieżący ranking modelu (6 mies., karty od $20)", "",
+    lines += [f"## Bieżący ranking modelu (karty od ${MIN_CARD:.0f})", "",
               f"Stan na {panel.date.max():%Y-%m-%d}. Kolejność wg `score` (0–1, wyżej = lepiej) = średnia rang modelu "
               "szukającego kart, które zdrożeją o 50%+ (`szansa_50`), i modelu zwrotu (`model_6m`); "
               "w teście ta para najlepiej wybierała karty na rok (sekcja 12 mies.). Z jednego setu najwyżej "
@@ -231,17 +236,17 @@ def main() -> int:
               "w ostatnich 8 tyg. (3+ = ostrożnie: na historii takie karty wypadały ok. 14% gorzej od rynku w 6 mies.). To lista do sprawdzenia, nie rekomendacja zakupu.", "",
               rank.drop(columns="card_id").head(25).to_markdown(index=False, floatfmt=".2f"), ""]
     # tanie karty ($5–20): w teście 10 najwyżej ocenionych podwajało się w rok w ok. połowie przypadków
-    cheap = now[now.price_now.between(5, MIN_INVEST, inclusive="left")].copy()
+    cheap = now[now.price_now.between(5, MIN_CARD, inclusive="left")].copy()
     cheap["score"] = (cheap["szansa_50"].rank(pct=True) + cheap["model_6m"].rank(pct=True)) / 2
     cheap = cheap.sort_values("score", ascending=False)
     first = cheap.groupby("set_id").cumcount() < PER_SET
     cheap = pd.concat([cheap[first], cheap[~first]])[cols]
     cheap.to_csv(reports / "ranking_tanie.csv", index=False)
-    lines += [f"## Tanie karty ($5–{MIN_INVEST:.0f})", "",
+    lines += [f"## Tańsze karty ($5–{MIN_CARD:.0f})", "",
               "Ta sama ocena co wyżej, dla tańszych kart (pełna lista w `reports/ranking_tanie.csv`). "
               "Przy takich kwotach wysyłka zjada dużą część zysku, więc to raczej lista na lata niż na szybki obrót.", "",
               cheap.drop(columns="card_id").head(20).to_markdown(index=False, floatfmt=".2f"), ""]
-    lines += market_section(panel)
+    lines += market_section(panel, reports)
     lines += sealed_section(a.data, reports, rp)
     lines += track_live(panel, rank, reports)
     (reports / "evaluation.md").write_text("\n".join(lines))
