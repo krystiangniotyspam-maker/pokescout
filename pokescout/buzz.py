@@ -79,3 +79,35 @@ def buzz_features(posts: pd.DataFrame, keys: set[str]) -> pd.DataFrame:
     out = pd.concat({"buzz_share": share.stack(), "buzz_growth": growth.stack(), "buzz_eng": eng.stack()}, axis=1)
     out.index.names = ["date", "poke"]
     return out.reset_index()
+
+
+SET_ALIASES = {"scarlet & violet 151": [r"(?<![\d$.])151(?!\d)"], "prismatic evolutions": ["prismatic"],
+               "evolving skies": ["evolving skies", r"\bevs\b"]}
+
+
+def reprint_mentions(posts: pd.DataFrame, sets: pd.DataFrame, weeks: int = 8) -> pd.DataFrame:
+    """Posty o dodrukach danego setu (tytuł z „reprint” i nazwą setu) z ostatnich `weeks` tygodni.
+
+    Zwraca (date, set_id, reprint_posts); `date` to niedziela kończąca tydzień. Na historii karty z setów,
+    o których dodrukach pisano 3+ razy w 8 tygodni, wypadały gorzej od rynku (6 mies. ok. −14%), ale model
+    już je omijał, więc to informacja w rankingu, nie cecha modelu."""
+    rp = posts[posts["title"].fillna("").str.contains("reprint", case=False)]
+    if rp.empty:
+        return pd.DataFrame(columns=["date", "set_id", "reprint_posts"])
+    titles = rp["title"].str.lower()
+    rows = []
+    for gid, name in zip(sets["group_id"], sets["set_name"]):
+        key = re.sub(r"^[A-Za-z0-9 ]+?:\s*", "", str(name)).lower().strip()
+        kws = SET_ALIASES.get(key, [re.escape(key)] if len(key) >= 6 else [])
+        if kws:
+            rows += [(str(gid), d) for d in rp["date"][titles.str.contains("|".join(kws))]]
+    if not rows:
+        return pd.DataFrame(columns=["date", "set_id", "reprint_posts"])
+    r = pd.DataFrame(rows, columns=["set_id", "d"])
+    r["date"] = r["d"].dt.to_period("W-SUN").dt.end_time.dt.normalize()
+    w = r.groupby(["date", "set_id"]).size().unstack()
+    idx = pd.date_range(posts["date"].min().normalize(), posts["date"].max() + pd.Timedelta(days=7), freq="W-SUN")
+    w = w.reindex(idx).fillna(0).rolling(weeks, min_periods=1).sum()
+    out = w.stack().rename("reprint_posts").reset_index()
+    out.columns = ["date", "set_id", "reprint_posts"]
+    return out
