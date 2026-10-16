@@ -58,6 +58,9 @@ def _card_line(i: int, r, rarity: dict) -> str:
         pct, lo, hi = (round(r[c], 2) for c in ("potencjal_rok", "potencjal_od", "potencjal_do"))
         line += (f"\n   📈 **za rok ok. {pct:+.0%} → ok. ${p * (1 + pct):.0f}** "
                  f"(zwykle ${p * (1 + lo):.0f}–${p * (1 + hi):.0f})")
+        if pd.notna(r.get("potencjal_slaby")):
+            w = round(r["potencjal_slaby"], 2)
+            line += f"\n   🌧️ w słabym rynku ok. {w:+.0%} → ok. ${p * (1 + w):.0f}"
     if isinstance(r.get("dlaczego"), str):
         line += f"\n   💬 {r.dlaczego}"
     return line
@@ -159,8 +162,8 @@ def build() -> str:
             out.append(f"{i}. **[{r['name']}](https://www.tcgplayer.com/product/{r.product_id})** · "
                        f"${r.price_now:.0f}{eur} · [Cardmarket]({_cm_link(r['name'])}){warn}")
         out += [""]
-    out += ["📈 = prognoza na rok dla tej karty: jak w latach 2025–26 rosły karty podobnie ocenione i o podobnych cechach, "
-            "i do jakiej ceny by doszła (mocny rynek – w słabszym roku mniej; dłużej niż rok nie da się jeszcze sprawdzić). "
+    out += ["📈 = prognoza na rok w dobrym rynku: jak w latach 2025–26 rosły karty podobnie ocenione i o podobnych cechach. "
+            "🌧️ = to samo w słabym rynku: jak wypadały podobnie ocenione karty kupione w 2021 roku, przed krachem. "
             "💬 = dlaczego karta jest wysoko.",
             "Kupuj kilka pozycji, nie jedną. ⚠️ dodruk = dużo postów o dodruku setu.",
             f"Pełne listy: {REPO_URL}/ranking.csv · {REPO_URL}/sealed_ranking.csv"]
