@@ -27,7 +27,7 @@ jobs:
       - run: pip install -r requirements.txt
       - name: Nowe posty z Reddita (tylko brakujące miesiące)
         continue-on-error: true   # bez świeżych postów ranking i tak powstanie
-        timeout-minutes: 20
+        timeout-minutes: 60       # pierwsze uruchomienia dociągają lata 2020–23, kolejne tylko nowe miesiące
         run: python scripts/collect_reddit.py
       - name: Ceny z Cardmarket (EUR)
         continue-on-error: true

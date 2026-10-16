@@ -6,7 +6,9 @@ naraz (API oddaje po 100 postów). Przy kolejnym uruchomieniu pobiera tylko brak
 oraz odświeża ostatni zapisany i bieżący, więc ten sam skrypt służy do importu historii
 i do codziennej aktualizacji.
 
-    python scripts/collect_reddit.py --start 2024-01-01
+    python scripts/collect_reddit.py --start 2020-01-01
+
+Starsze miesiące dociągają się stopniowo: krok ma limit czasu, a kolejne uruchomienia pobierają resztę.
 """
 from __future__ import annotations
 
@@ -93,7 +95,7 @@ def collect(subs: tuple[str, ...], start: str, workers: int = 4) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--start", default="2024-01-01")
+    ap.add_argument("--start", default="2020-01-01")  # od boomu 2020–21: wskaźnik zainteresowania
     ap.add_argument("--workers", type=int, default=4)
     a = ap.parse_args()
     n = collect(SUBREDDITS, a.start, a.workers)
