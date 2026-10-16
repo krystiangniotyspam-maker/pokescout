@@ -90,6 +90,12 @@ def _market() -> dict:
     return json.loads((REPORTS / "market.json").read_text()) if (REPORTS / "market.json").exists() else {}
 
 
+def _data_date(m: dict) -> str:
+    """Dzień ostatnich cen (nazwa najnowszego pliku data/prices/RRRR/MM/DD.csv.gz); market.json ma koniec tygodnia."""
+    files = sorted((ROOT / "data" / "prices").glob("*/*/*.csv.gz"))
+    return f"{files[-1].parts[-3]}-{files[-1].parts[-2]}-{files[-1].name[:2]}" if files else m.get("date", "")
+
+
 def _rarity() -> dict:
     if not (CATALOG / "cards.csv").exists():
         return {}
@@ -138,7 +144,7 @@ def alerts(prev: dict) -> str:
         out.append(f"🔄 **Zmiana na rynku:** {_verdict(m)}")
     if not out:
         return ""
-    return "\n\n".join([f"🔔 **PokeScout – alert {m.get('date', '')}**", *out,
+    return "\n\n".join([f"🔔 **PokeScout – alert (ceny z {_data_date(m)})**", *out,
                          "Pełny raport przyjdzie w pierwszy poniedziałek miesiąca."])
 
 
@@ -146,7 +152,7 @@ def build() -> str:
     cards, cheap, box = _read("ranking.csv"), _read("ranking_tanie.csv"), _read("sealed_ranking.csv")
     rarity, m = _rarity(), _market()
 
-    out = [f"🃏 **PokeScout – raport miesiąca ({m.get('date', '')})**", ""]
+    out = [f"🃏 **PokeScout – raport miesiąca (ceny z {_data_date(m)})**", ""]
     if m:
         out += [f"**Rynek:** {_verdict(m)} (ostatnie 3 mies.: {m['trend_90']:+.1%}/mies.)"]
         if m.get("interest_yoy") is not None:
