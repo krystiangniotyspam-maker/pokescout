@@ -54,12 +54,22 @@ def _card_line(i: int, r, rarity: dict) -> str:
     line = (f"{i}. **[{name}](https://www.tcgplayer.com/product/{r.card_id})** · {_set(r.set_name)} · "
             f"${r.price_now:.0f} · [Cardmarket]({_cm_link(base)}){warn}")
     if pd.notna(r.get("potencjal_rok")):
-        p = r.price_now
-        line += (f"\n   📈 **za rok ok. {r.potencjal_rok:+.0%} → ok. ${p * (1 + r.potencjal_rok):.0f}** "
-                 f"(zwykle ${p * (1 + r.potencjal_od):.0f}–${p * (1 + r.potencjal_do):.0f})")
+        p = round(r.price_now)  # liczymy z tych samych zaokrągleń, które widać w raporcie
+        pct, lo, hi = (round(r[c], 2) for c in ("potencjal_rok", "potencjal_od", "potencjal_do"))
+        line += (f"\n   📈 **za rok ok. {pct:+.0%} → ok. ${p * (1 + pct):.0f}** "
+                 f"(zwykle ${p * (1 + lo):.0f}–${p * (1 + hi):.0f})")
     if isinstance(r.get("dlaczego"), str):
         line += f"\n   💬 {r.dlaczego}"
     return line
+
+
+def _top(df: pd.DataFrame, n: int) -> pd.DataFrame:
+    """Z czołówki rankingu (2×n kart) bierze n z największym potencjałem i sortuje je od największego.
+    Na historii wybór wg potencjału spośród najwyżej ocenionych kart dawał wyższe zwroty niż sama kolejność."""
+    head = df.head(2 * n)
+    if "potencjal_rok" not in head or head["potencjal_rok"].isna().all():
+        return head.head(n)
+    return head.sort_values("potencjal_rok", ascending=False).head(n)
 
 
 def _section(title: str, df: pd.DataFrame, rarity: dict) -> list[str]:
@@ -86,7 +96,7 @@ def _rarity() -> dict:
 
 def state_now() -> dict:
     cards, m = _read("ranking.csv"), _market()
-    top = cards.head(TOP_N)
+    top = _top(cards, TOP_N) if len(cards) else cards
     return {"date": m.get("date", ""), "verdict": _verdict(m)[:1] if m else "",
             "top": [int(c) for c in top.card_id],
             "prices": {str(int(r.card_id)): float(r.price_now) for _, r in top.iterrows()},
@@ -100,7 +110,7 @@ def alerts(prev: dict) -> str:
         return ""
     out = []
     cur = cards.set_index("card_id")
-    new = [c for c in cards.card_id.head(3) if c not in prev.get("top", [])]
+    new = [c for c in _top(cards, TOP_N).card_id.head(3) if c not in prev.get("top", [])]
     if new:
         lines = []
         for i, c in enumerate(new, 1):
@@ -137,10 +147,10 @@ def build() -> str:
     if m:
         out += [f"**Rynek:** {_verdict(m)} (ostatnie 3 mies.: {m['trend_90']:+.1%}/mies.)", ""]
     if len(cards):
-        out += _section("🔥 **Karty na lata – top 8** (od $50)", cards.head(8), rarity)
+        out += _section("🔥 **Karty na lata – top 8** (od $50, od największego potencjału)", _top(cards, TOP_N), rarity)
     gems = cheap[cheap.price_now >= 15] if len(cheap) else cheap
     if len(gems):
-        out += _section("💎 **Tańsze perełki – top 3** ($15–50)", gems.head(3), rarity)
+        out += _section("💎 **Tańsze perełki – top 3** ($15–50)", _top(gems, 3), rarity)
     if len(box):
         out += ["📦 **Boxy i ETB – top 3**"]
         for i, (_, r) in enumerate(box.head(3).iterrows(), 1):
