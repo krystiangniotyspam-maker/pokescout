@@ -125,7 +125,7 @@ def reasons(df: pd.DataFrame, top: int = 3) -> pd.Series:
     return pct.apply(pick, axis=1)
 
 
-def market_section(panel: pd.DataFrame, reports: Path) -> list[str]:
+def market_section(panel: pd.DataFrame, reports: Path, seen_at: str = "") -> list[str]:
     """Kiedy kupować: tempo całego rynku (mediana trendów kart) a późniejszy zwrot mediany rynku."""
     idx = panel.groupby("date").agg(trend_90=("slope_90", "median"), trend_180=("slope_180", "median"),
                                     zwrot_3m=("fwd_3", "median"), zwrot_6m=("fwd_6", "median"))
@@ -133,14 +133,16 @@ def market_section(panel: pd.DataFrame, reports: Path) -> list[str]:
     now = idx.iloc[-1]
     pct = lambda c: (idx[c] <= now[c]).mean()
     (reports / "market.json").write_text(json.dumps(
-        {"date": f"{idx.index[-1]:%Y-%m-%d}", "trend_90": round(float(now.trend_90), 4),
+        {"date": seen_at or f"{idx.index[-1]:%Y-%m-%d}",
+         "week_bucket_end": f"{idx.index[-1]:%Y-%m-%d}", "trend_90": round(float(now.trend_90), 4),
          "pct_90": round(float(pct("trend_90")), 3)}))
     return ["## Rynek: kiedy kupować", "",
             "Trend rynku = mediana trendów cen wszystkich kart (%/mies.). Na historii szybki wzrost rynku "
             "zapowiadał słabsze kolejne miesiące, a spokojny lub spadający rynek – lepsze (korelacja rang poniżej; "
             "to tylko ok. 2 cykle, więc traktuj orientacyjnie).", "",
             corr.round(2).to_markdown(), "",
-            f"Teraz ({idx.index[-1]:%Y-%m-%d}): trend 90 dni {now.trend_90:+.1%}/mies. "
+            f"Teraz (ceny do {seen_at or str(idx.index[-1].date())}; etykieta tygodnia "
+            f"{idx.index[-1]:%Y-%m-%d}): trend 90 dni {now.trend_90:+.1%}/mies. "
             f"(wyżej niż w {pct('trend_90'):.0%} historii), trend 180 dni {now.trend_180:+.1%}/mies. "
             f"(wyżej niż w {pct('trend_180'):.0%} historii).", ""]
 
@@ -334,6 +336,7 @@ def main() -> int:
     if not n_days:
         print("Brak danych w data/prices")
         return 1
+    latest_observation = observed_at(a.data)
     posts = load_reddit(a.data)
     buzz = buzz_features(posts, {pokemon_key(m.name) for m in metas.values()}) if len(posts) else None
     print(f"Posty z Reddita: {len(posts)}")
@@ -446,7 +449,8 @@ def main() -> int:
     rank = pd.concat([rank[first], rank[~first]])
     rank[cols].to_csv(reports / "ranking.csv", index=False)
     lines += [f"## Bieżący ranking modelu (karty od ${MIN_CARD:.0f})", "",
-              f"Stan na {panel.date.max():%Y-%m-%d}. Kolejność wg `score` (0–1, wyżej = lepiej) = średnia rang modelu "
+              f"Ceny do {latest_observation}; etykieta tygodniowa {panel.date.max():%Y-%m-%d}. "
+              "Kolejność wg `score` (0–1, wyżej = lepiej) = średnia rang modelu "
               "szukającego kart, które zdrożeją o 50%+ (`szansa_50`), i modelu zwrotu (`model_6m`); "
               "w teście ta para najlepiej wybierała karty na rok (sekcja 12 mies.). Z jednego setu najwyżej "
               f"{PER_SET} karty na początku listy, kolejne trafiają niżej. `przedzial` = pozycja w rankingu, `hist_*` = jak rosły w rok "
@@ -470,12 +474,12 @@ def main() -> int:
               "Ta sama ocena co wyżej, dla tańszych kart (pełna lista w `reports/ranking_tanie.csv`). "
               "Przy takich kwotach wysyłka zjada dużą część zysku, więc to raczej lista na lata niż na szybki obrót.", "",
               cheap.drop(columns="card_id").head(20).to_markdown(index=False, floatfmt=".2f"), ""]
-    lines += market_section(panel, reports)
+    lines += market_section(panel, reports, seen_at=latest_observation)
     lines += interest_section(a.data, reports)
     lines += sealed_section(a.data, reports, rp)
     lines += track_live(
         panel, rank, reports,
-        seen_at=observed_at(a.data),
+        seen_at=latest_observation,
         snapshot_hash=data_snapshot_hash(a.data),
         source_sha=code_commit_sha(ROOT),
     )
