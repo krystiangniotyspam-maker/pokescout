@@ -71,6 +71,13 @@ def potential_for(pct: pd.Series, table: pd.DataFrame) -> pd.DataFrame:
                          "potencjal_do": b.map(table["p75"]).astype(float)}, index=pct.index)
 
 
+# Słaby rynek: mediana zwrotu w rok kart od $50 wg przedziału rankingu przy zakupach w 2021 roku
+# (szczyt boomu, potem krach). Liczone na miesięcznych cenach PriceCharting 2020–2024 (data/history),
+# modelem z tymi samymi typami cech, uczonym na 2023 roku. Średnia top 20 wyszła wtedy +9%, ale mediana
+# jest niższa, bo zysk robiło kilka kart; pokazujemy medianę (typową kartę).
+WEAK_MARKET = {0.5: -0.214, 0.8: -0.135, 0.9: -0.111, 0.95: -0.082, 1.0: -0.056}
+
+
 def card_potential(panel: pd.DataFrame, cards: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
     """Potencjał osobno dla każdej karty: średnia z przedziału rankingu (jak rosły w rok podobnie ocenione
     karty) plus połowa różnicy, o ile model uczony wprost na zwrotach rocznych ocenia tę kartę lepiej lub
@@ -88,8 +95,10 @@ def card_potential(panel: pd.DataFrame, cards: pd.DataFrame, table: pd.DataFrame
     bins = pd.cut(cards["score"], POT_BINS, include_lowest=True)
     shift = 0.5 * (own - own.groupby(bins, observed=True).transform("median"))
     est = base["potencjal_rok"] + shift
+    # w słabym rynku różnice między kartami bierzemy w połowie – nie wiemy, czy przenoszą się w całości
+    weak = bins.map(lambda b: WEAK_MARKET.get(round(b.right, 2), np.nan)).astype(float) + 0.5 * shift
     return pd.DataFrame({"potencjal_rok": est, "potencjal_od": base["potencjal_od"] + shift,
-                         "potencjal_do": base["potencjal_do"] + shift}, index=cards.index)
+                         "potencjal_do": base["potencjal_do"] + shift, "potencjal_slaby": weak}, index=cards.index)
 
 
 REASONS = [  # (cecha, kierunek, opis) – czytelne powody przy karcie; to cechy, które model ceni, nie dokładny rozkład
@@ -322,6 +331,7 @@ def main() -> int:
     inv = now[now.price_now >= MIN_CARD]
     now["score"] = (inv["szansa_50"].rank(pct=True) + inv["model_6m"].rank(pct=True)) / 2
     cols = ["card_id", "name", "set_name", "price_now", "score", "potencjal_rok", "potencjal_od", "potencjal_do",
+            "potencjal_slaby",
             "dodruk_posty", "dlaczego", "szansa_50", "model_6m", "combo", "spread", "poke_pop",
             "rv_z", "weeks_since_low", "buzz_share", "model_net_6m"]
     inv_idx = now.index[now.price_now >= MIN_CARD]
