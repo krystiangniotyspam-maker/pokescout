@@ -6,6 +6,8 @@ Porównuje: obecne reguły (moduł A i B1), pojedyncze cechy i model uczony (wal
 """
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -189,26 +191,63 @@ def sealed_section(data_dir: str, reports: Path, reprints: pd.Series) -> list[st
             rank.drop(columns="product_id").head(15).to_markdown(index=False, floatfmt=".2f"), ""]
 
 
-def track_live(panel: pd.DataFrame, rank: pd.DataFrame, reports: Path) -> list[str]:
+MODEL_FILES = ("pokescout/evaluate.py", "pokescout/features.py", "pokescout/buzz.py", "pokescout/tiers.py",
+               "pokescout/data.py", "scripts/evaluate.py")
+
+
+def model_sha() -> str:
+    """Wersja modelu w logu wyborów: skrót kodu, który liczy cechy, uczy model i układa ranking."""
+    h = hashlib.sha256()
+    for f in MODEL_FILES:
+        h.update((ROOT / f).read_bytes())
+    h.update(",".join(FEATURES).encode())
+    return h.hexdigest()[:12]
+
+
+def observed_at(data_dir: str | Path) -> str:
+    """Dzień najnowszych cen (data/prices/RRRR/MM/DD.csv.gz). `date` w panelu to koniec tygodnia (niedziela),
+    który może wypadać po dniu przebiegu – do logu zapisujemy obie daty."""
+    files = sorted((Path(data_dir) / "prices").glob("*/*/*.csv.gz"))
+    return f"{files[-1].parts[-3]}-{files[-1].parts[-2]}-{files[-1].name[:2]}" if files else ""
+
+
+def first_runs(log: pd.DataFrame) -> pd.DataFrame:
+    """Do oceny na żywo liczy się tylko PIERWSZY zapis wyborów dla danej daty (PROTOCOL.md). Wiersze sprzed
+    wprowadzenia `run_at` traktujemy jako pierwsze."""
+    if "run_at" not in log or log.empty:
+        return log
+    ra = log["run_at"].fillna("")
+    first = ra.groupby(log["date"]).transform("min")
+    return log[ra == first]
+
+
+def track_live(panel: pd.DataFrame, rank: pd.DataFrame, reports: Path, seen_at: str = "",
+               run_at: str | None = None) -> list[str]:
     """Kontrola na żywo: zapisuje top-20 z każdego dnia rankingu i rozlicza je, gdy minie horyzont.
 
     Te wybory powstały bez znajomości przyszłości, więc to jedyny test, którego nie da się
-    (nawet nieświadomie) dopasować do historii."""
+    (nawet nieświadomie) dopasować do historii. Log jest tylko dopisywany: ponowny przebieg tej samej
+    daty tym samym modelem niczego nie zmienia, innym modelem – dopisuje się obok, a w ocenie liczy się
+    pierwszy zapis."""
     log_f = reports / "picks_log.csv"
     log = pd.read_csv(log_f, parse_dates=["date"], dtype={"card_id": str}) if log_f.exists() else pd.DataFrame()
-    today = panel.date.max()
-    if len(log):  # ponowny przebieg w tym samym tygodniu nadpisuje jego wybory
-        log = log[log.date != today]
-    top = rank.head(TOP_K).assign(date=today, rank=range(1, min(TOP_K, len(rank)) + 1))
-    new = top[["date", "rank", "card_id", "name", "price_now", "score", "szansa_50", "model_6m", "combo"]]
-    log = pd.concat([log, new], ignore_index=True) if len(log) else new
-    log.to_csv(log_f, index=False)
+    today, sha = panel.date.max(), model_sha()
+    run_at = run_at or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    same = len(log) and "model_sha" in log and ((log.date == today) & (log.model_sha == sha)).any()
+    if not same:
+        top = rank.head(TOP_K).assign(date=today, rank=range(1, min(TOP_K, len(rank)) + 1),
+                                      model_sha=sha, observed_at=seen_at, run_at=run_at)
+        new = top[["date", "rank", "card_id", "name", "price_now", "score", "szansa_50", "model_6m", "combo",
+                   "model_sha", "observed_at", "run_at"]]
+        log = pd.concat([log, new], ignore_index=True) if len(log) else new
+        log.to_csv(log_f, index=False)
     lines = ["## Kontrola na żywo", "",
-             f"Każdy przebieg zapisuje top-{TOP_K} do `reports/picks_log.csv`; po 3 i 6 mies. liczymy, jak wypadły.", ""]
+             f"Każdy przebieg dopisuje top-{TOP_K} do `reports/picks_log.csv` (z wersją modelu i dniem cen); "
+             "po 3 i 6 mies. liczymy, jak wypadły. Liczy się pierwszy zapis dla danej daty (PROTOCOL.md).", ""]
     rows = []
     p = panel.assign(card_id=panel.card_id.astype(str))
     for h in (3, 6):
-        j = log.merge(p[["date", "card_id", f"ex_{h}", f"net_{h}"]], on=["date", "card_id"], how="left")
+        j = first_runs(log).merge(p[["date", "card_id", f"ex_{h}", f"net_{h}"]], on=["date", "card_id"], how="left")
         done = j[j[f"ex_{h}"].notna()]
         for d, g in done.groupby("date"):
             rows.append(dict(data=f"{d:%Y-%m-%d}", horyzont=f"{h} mies.", kart=len(g),
@@ -369,7 +408,7 @@ def main() -> int:
     lines += market_section(panel, reports)
     lines += interest_section(a.data, reports)
     lines += sealed_section(a.data, reports, rp)
-    lines += track_live(panel, rank, reports)
+    lines += track_live(panel, rank, reports, seen_at=observed_at(a.data))
     (reports / "evaluation.md").write_text("\n".join(lines))
     print("\n".join(lines))
     return 0
