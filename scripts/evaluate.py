@@ -134,6 +134,36 @@ def market_section(panel: pd.DataFrame, reports: Path) -> list[str]:
             f"(wyżej niż w {pct('trend_180'):.0%} historii).", ""]
 
 
+def interest_section(data_dir: str, reports: Path) -> list[str]:
+    """Zainteresowanie Pokémonami: miesięczna liczba komentarzy pod postami na r/PokemonTCG (największy
+    i najstarszy subreddit o kartach; komentarze są stabilniejsze niż liczba postów, którą zmieniają
+    zasady moderacji). Porównanie ostatnich 3 pełnych miesięcy z tymi samymi miesiącami rok wcześniej
+    i ze szczytem; dopisuje wynik do reports/market.json."""
+    files = sorted((Path(data_dir) / "buzz" / "reddit" / "PokemonTCG").glob("*.csv.gz"))
+    if not files:
+        return []
+    n = pd.Series({pd.Period(f.name[:7], "M"): pd.read_csv(f, usecols=["num_comments"]).num_comments.clip(lower=0).sum()
+                   for f in files})
+    n = n[n.index < pd.Timestamp.utcnow().tz_localize(None).to_period("M")]  # bez bieżącego, niepełnego
+    if len(n) < 15:
+        return []
+    last3 = n.iloc[-3:].mean()
+    ago = n.reindex([m - 12 for m in n.index[-3:]]).mean()
+    peak = n.rolling(3).mean().idxmax()
+    info = {"interest_yoy": round(float(last3 / ago - 1), 3) if ago > 0 else None,
+            "interest_vs_peak": round(float(last3 / n.rolling(3).mean().max()), 3),
+            "interest_peak": str(peak), "interest_since": str(n.index[0])}
+    f = reports / "market.json"
+    m = json.loads(f.read_text()) if f.exists() else {}
+    f.write_text(json.dumps(m | info))
+    yearly = n.groupby(n.index.year).mean().round(0).astype(int)
+    return ["## Zainteresowanie (komentarze na r/PokemonTCG)", "",
+            f"Średnio komentarzy miesięcznie w kolejnych latach: "
+            + ", ".join(f"{y}: {v}" for y, v in yearly.items()) + ". "
+            f"Ostatnie 3 miesiące vs rok wcześniej: {info['interest_yoy']:+.0%}; "
+            f"to {info['interest_vs_peak']:.0%} szczytu ({peak}, średnia 3 mies.).", ""]
+
+
 def sealed_section(data_dir: str, reports: Path, reprints: pd.Series) -> list[str]:
     prices, cat = sealed.load_sealed_weekly(data_dir)
     if prices.empty:
@@ -327,6 +357,7 @@ def main() -> int:
               "Przy takich kwotach wysyłka zjada dużą część zysku, więc to raczej lista na lata niż na szybki obrót.", "",
               cheap.drop(columns="card_id").head(20).to_markdown(index=False, floatfmt=".2f"), ""]
     lines += market_section(panel, reports)
+    lines += interest_section(a.data, reports)
     lines += sealed_section(a.data, reports, rp)
     lines += track_live(panel, rank, reports)
     (reports / "evaluation.md").write_text("\n".join(lines))

@@ -145,7 +145,14 @@ def build() -> str:
 
     out = [f"🃏 **PokeScout – raport miesiąca ({m.get('date', '')})**", ""]
     if m:
-        out += [f"**Rynek:** {_verdict(m)} (ostatnie 3 mies.: {m['trend_90']:+.1%}/mies.)", ""]
+        out += [f"**Rynek:** {_verdict(m)} (ostatnie 3 mies.: {m['trend_90']:+.1%}/mies.)"]
+        if m.get("interest_yoy") is not None:
+            trend = "📈 rośnie" if m["interest_yoy"] > 0.1 else "📉 spada" if m["interest_yoy"] < -0.1 else "➡️ stabilne"
+            line = f"**Zainteresowanie:** {trend} – dyskusje na Reddicie {m['interest_yoy']:+.0%} rok do roku"
+            if m.get("interest_since", "9999") <= "2021-01":
+                line += f", {m['interest_vs_peak']:.0%} szczytu z {m['interest_peak'][:4]}"
+            out.append(line)
+        out += [""]
     if len(cards):
         out += _section("🔥 **Karty na lata – top 8** (od $50, od największego potencjału)", _top(cards, TOP_N), rarity)
     gems = cheap[cheap.price_now >= 15] if len(cheap) else cheap
