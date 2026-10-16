@@ -29,6 +29,10 @@ REPO_URL = "https://github.com/krystiangniotyspam-maker/pokescout/blob/main/repo
 STATE = REPORTS / "discord_state.json"
 TOP_N = 8
 PRICE_DROP = 0.15  # spadek ceny karty z czołówki, przy którym wysyłamy alert „okazja”
+# Krach 2021 – jak wypadał CAŁY rynek, bez żadnego modelu: mediana zmiany ceny kart od $50 kupionych
+# w 03–12.2021, miesięczne ceny PriceCharting (Kaggle, 12.2020–11.2024). Nie mówi nic o przewadze rankingu:
+# prosta ocena bez wiedzy z przyszłości nie dawała wtedy przewagi nad rynkiem (Issue #13).
+CRASH_2021 = {"rok": -0.169, "2 lata": -0.158, "3 lata": -0.098}
 RARITY_SHORT = {"special illustration rare": "SIR", "illustration rare": "IR", "hyper rare": "złota",
                 "ultra rare": "UR", "secret rare": "secret", "double rare": "ex", "classic collection": "Classic"}
 
@@ -53,26 +57,17 @@ def _card_line(i: int, r, rarity: dict) -> str:
     warn = " ⚠️ dodruk" if r.get("dodruk_posty", 0) >= 3 else ""
     line = (f"{i}. **[{name}](https://www.tcgplayer.com/product/{r.card_id})** · {_set(r.set_name)} · "
             f"${r.price_now:.0f} · [Cardmarket]({_cm_link(base)}){warn}")
-    if pd.notna(r.get("potencjal_rok")):
-        p = round(r.price_now)  # liczymy z tych samych zaokrągleń, które widać w raporcie
-        pct, lo, hi = (round(r[c], 2) for c in ("potencjal_rok", "potencjal_od", "potencjal_do"))
-        line += (f"\n   📈 **za rok ok. {pct:+.0%} → ok. ${p * (1 + pct):.0f}** "
-                 f"(zwykle ${p * (1 + lo):.0f}–${p * (1 + hi):.0f})")
-        if pd.notna(r.get("potencjal_slaby")):
-            w = round(r["potencjal_slaby"], 2)
-            line += f"\n   🌧️ w słabym rynku ok. {w:+.0%} → ok. ${p * (1 + w):.0f}"
+    if isinstance(r.get("przedzial"), str):
+        line += f"\n   📊 ranking: {r.przedzial}"
     if isinstance(r.get("dlaczego"), str):
         line += f"\n   💬 {r.dlaczego}"
     return line
 
 
 def _top(df: pd.DataFrame, n: int) -> pd.DataFrame:
-    """Z czołówki rankingu (2×n kart) bierze n z największym potencjałem i sortuje je od największego.
-    Na historii wybór wg potencjału spośród najwyżej ocenionych kart dawał wyższe zwroty niż sama kolejność."""
-    head = df.head(2 * n)
-    if "potencjal_rok" not in head or head["potencjal_rok"].isna().all():
-        return head.head(n)
-    return head.sort_values("potencjal_rok", ascending=False).head(n)
+    """Pierwsze n kart w kolejności rankingu (ranking.csv jest już posortowany, z limitem kart z jednego setu).
+    Wcześniej przestawialiśmy je wg „potencjału” z modelu rocznego bez walk-forward – usunięte (Issue #13)."""
+    return df.head(n)
 
 
 def _section(title: str, df: pd.DataFrame, rarity: dict) -> list[str]:
@@ -94,6 +89,22 @@ def _data_date(m: dict) -> str:
     """Dzień ostatnich cen (nazwa najnowszego pliku data/prices/RRRR/MM/DD.csv.gz); market.json ma koniec tygodnia."""
     files = sorted((ROOT / "data" / "prices").glob("*/*/*.csv.gz"))
     return f"{files[-1].parts[-3]}-{files[-1].parts[-2]}-{files[-1].name[:2]}" if files else m.get("date", "")
+
+
+def _history() -> list[str]:
+    """Jak rosły w rok karty z danego przedziału rankingu – opis historii, nie prognoza."""
+    t = _read("potential_table.csv")
+    if t.empty:
+        return []
+    t = t.iloc[::-1]  # od najlepszego przedziału
+    rows = [f"• {r.przedzial}: zwykle {r.mediana:+.0%} (połowa kart od {r.p25:+.0%} do {r.p75:+.0%})"
+            for r in t.head(3).itertuples()]
+    return [f"📚 **Historia, nie prognoza.** Jak w ciągu roku zmieniały się ceny kart od $50 z danego miejsca "
+            f"w rankingu (decyzje {str(t.od.iloc[0])[:7]} – {str(t.do.iloc[0])[:7]}, dobry rynek; "
+            "brana słabsza z dwóch połówek tego okresu):", *rows,
+            f"🌧️ W krachu 2021 typowa karta od $50 straciła {-CRASH_2021['rok']:.0%} w rok, "
+            f"{-CRASH_2021['2 lata']:.0%} w 2 lata i {-CRASH_2021['3 lata']:.0%} w 3 lata. Nie wiemy, czy ranking "
+            "chroniłby przed takim spadkiem – na tych danych prosta ocena kart nie dawała wtedy przewagi.", ""]
 
 
 def _rarity() -> dict:
@@ -163,12 +174,8 @@ def build() -> str:
             out.append(line)
         out += [""]
     if len(cards):
-        out += _section("🔥 **Karty na lata – top 8** (od $50, od największego potencjału)", _top(cards, TOP_N), rarity)
-        # Najwyżej oceniane 5% kart od $50 w historii PriceCharting 2021–24 (mediana, połowa kart w nawiasie).
-        out += ["⏳ **Za 2–3 lata** (jak wypadały karty z czołówki rankingu w latach 2021–24):",
-                "• spokojny rynek: po 2 latach zwykle ok. **+25%** (połowa kart od −3% do +57%)",
-                "• po krachu z 2021: po 3 latach ok. **0%** (połowa od −20% do +34%), "
-                "gdy przeciętna karta od $50 straciła 10%", ""]
+        out += _section("🔥 **Karty na lata – top 8** (od $50, w kolejności rankingu)", _top(cards, TOP_N), rarity)
+        out += _history()
     gems = cheap[cheap.price_now >= 15] if len(cheap) else cheap
     if len(gems):
         out += _section("💎 **Tańsze perełki – top 3** ($15–50)", _top(gems, 3), rarity)
@@ -180,9 +187,9 @@ def build() -> str:
             out.append(f"{i}. **[{r['name']}](https://www.tcgplayer.com/product/{r.product_id})** · "
                        f"${r.price_now:.0f}{eur} · [Cardmarket]({_cm_link(r['name'])}){warn}")
         out += [""]
-    out += ["📈 = prognoza na rok w dobrym rynku: jak w latach 2025–26 rosły karty podobnie ocenione i o podobnych cechach. "
-            "🌧️ = to samo w słabym rynku: jak wypadały podobnie ocenione karty kupione w 2021 roku, przed krachem. "
-            "💬 = dlaczego karta jest wysoko.",
+    out += ["📊 = miejsce karty w rankingu. 💬 = czym karta wyróżnia się na liście (cechy, które model ceni; "
+            "to opis karty, nie wyliczenie modelu). Ranking wskazuje karty do sprawdzenia, nie gwarantuje zysku; "
+            "ceny są z TCGplayer (USA) – w Polsce dolicz koszty Cardmarket lub wysyłki i cła.",
             "Kupuj kilka pozycji, nie jedną. ⚠️ dodruk = dużo postów o dodruku setu.",
             f"Pełne listy: {REPO_URL}/ranking.csv · {REPO_URL}/sealed_ranking.csv"]
     return "\n".join(out)

@@ -51,56 +51,54 @@ POT_BINS = [0.0, 0.5, 0.8, 0.9, 0.95, 1.0]  # przedziały pozycji w rankingu (1 
 def potential_table(panel: pd.DataFrame, score: pd.Series) -> pd.DataFrame:
     """Jak w historii rosły w rok karty od $MIN_CARD zależnie od pozycji w rankingu w dniu decyzji.
 
-    Pozycja = percentyl oceny wśród kart od $MIN_CARD tego dnia. Zwraca medianę i 25./75. percentyl
-    zwrotu za 12 mies. dla każdego przedziału – z tego bierze się „potencjał” przy bieżących kartach."""
+    Pozycja = percentyl oceny (walk-forward) wśród kart od $MIN_CARD tego dnia. Daty dzielimy na dwie
+    połowy i dla każdego przedziału bierzemy połowę ze słabszą medianą (z jej 25. i 75. percentylem).
+    Test poza próbą (Issue #13) pokazał, że tabela z całej historii zawyżała mediany górnych przedziałów
+    o 8–21 p.p. To opis historii 2025–26, NIE prognoza – raport pokazuje go jako taki."""
     df = panel.assign(_s=score)[["date", "_s", "fwd_12", "price_now"]].dropna()
     df = df[df.price_now >= MIN_CARD]
     if df.empty:
         return pd.DataFrame()
     df["pct"] = df.groupby("date")["_s"].rank(pct=True)
     df["bin"] = pd.cut(df.pct, POT_BINS, include_lowest=True)
-    ret = np.expm1(df.fwd_12)
-    return ret.groupby(df["bin"], observed=True).agg(
+    df["ret"] = np.expm1(df.fwd_12)
+    dates = sorted(df.date.unique())
+    df["half"] = df.date >= dates[len(dates) // 2]
+    t = df.groupby(["bin", "half"], observed=True).ret.agg(
         mediana="median", p25=lambda x: x.quantile(0.25), p75=lambda x: x.quantile(0.75), obs="size")
+    t = t[t.obs >= 20].reset_index()
+    if t.empty:
+        return pd.DataFrame()
+    t = t.loc[t.groupby("bin", observed=True).mediana.idxmin()].set_index("bin")
+    t["od"], t["do"] = dates[0], dates[-1]
+    return t.drop(columns="half")
+
+
+def bin_label(b) -> str:
+    """(0.95, 1.0] → „górne 5%”, (0.5, 0.8] → „miejsca 20–50% od góry”."""
+    top, bottom = round((1 - b.right) * 100), round((1 - b.left) * 100)
+    return f"górne {bottom}%" if top == 0 else f"{top}–{bottom}% od góry"
 
 
 def potential_for(pct: pd.Series, table: pd.DataFrame) -> pd.DataFrame:
-    if table is None or table.empty:
-        return pd.DataFrame(index=pct.index)
+    """Przedział rankingu karty i jak w historii rosły karty z tego przedziału (bez korekt dla karty)."""
     b = pd.cut(pct, POT_BINS, include_lowest=True)
-    return pd.DataFrame({"potencjal_rok": b.map(table["mediana"]).astype(float),
-                         "potencjal_od": b.map(table["p25"]).astype(float),
-                         "potencjal_do": b.map(table["p75"]).astype(float)}, index=pct.index)
+    out = pd.DataFrame({"przedzial": b.map(lambda x: bin_label(x) if pd.notna(x) else None)}, index=pct.index)
+    if table is None or table.empty:
+        return out
+    return out.assign(hist_mediana=b.map(table["mediana"]).astype(float),
+                      hist_p25=b.map(table["p25"]).astype(float),
+                      hist_p75=b.map(table["p75"]).astype(float))
 
 
-# Słaby rynek: mediana zwrotu w rok kart od $50 wg przedziału rankingu przy zakupach w 2021 roku
-# (szczyt boomu, potem krach). Liczone na miesięcznych cenach PriceCharting 2020–2024 (data/history),
-# modelem z tymi samymi typami cech, uczonym na 2023 roku. Średnia top 20 wyszła wtedy +9%, ale mediana
-# jest niższa, bo zysk robiło kilka kart; pokazujemy medianę (typową kartę).
-WEAK_MARKET = {0.5: -0.214, 0.8: -0.135, 0.9: -0.111, 0.95: -0.082, 1.0: -0.056}
+def card_potential(cards: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
+    """Przedział rankingu dla każdej karty. `score` to średnia dwóch rang, a tabela jest w percentylach,
+    więc najpierw przeliczamy go na percentyl wśród kart z tej listy.
 
-
-def card_potential(panel: pd.DataFrame, cards: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
-    """Potencjał osobno dla każdej karty: średnia z przedziału rankingu (jak rosły w rok podobnie ocenione
-    karty) plus połowa różnicy, o ile model uczony wprost na zwrotach rocznych ocenia tę kartę lepiej lub
-    gorzej od reszty przedziału. Model roczny ma tylko ~14 dat z wynikiem i na krótszej historii bywał
-    zawodny, więc bierzemy go w połowie; zakres (25.–75. percentyl) przesuwamy razem z oceną."""
-    base = potential_for(cards["score"], table)
-    hist = panel[panel.fwd_12.notna() & (panel.price_now >= 5)]
-    if base.empty or hist.date.nunique() < 6:
-        return base
-    from sklearn.ensemble import HistGradientBoostingRegressor
-    m = HistGradientBoostingRegressor(max_depth=3, learning_rate=0.05, max_iter=200, min_samples_leaf=200,
-                                      random_state=0).fit(hist[FEATURES], hist.fwd_12)
-    own = pd.Series(np.expm1(m.predict(cards[FEATURES])), index=cards.index).clip(-0.5, 2.0)
-    # tylko różnice między kartami (o ile karta jest lepsza/gorsza od podobnie ocenionych), bez poziomu rynku
-    bins = pd.cut(cards["score"], POT_BINS, include_lowest=True)
-    shift = 0.5 * (own - own.groupby(bins, observed=True).transform("median"))
-    est = base["potencjal_rok"] + shift
-    # w słabym rynku różnice między kartami bierzemy w połowie – nie wiemy, czy przenoszą się w całości
-    weak = bins.map(lambda b: WEAK_MARKET.get(round(b.right, 2), np.nan)).astype(float) + 0.5 * shift
-    return pd.DataFrame({"potencjal_rok": est, "potencjal_od": base["potencjal_od"] + shift,
-                         "potencjal_do": base["potencjal_do"] + shift, "potencjal_slaby": weak}, index=cards.index)
+    Wcześniej dochodziła korekta z modelu rocznego uczonego na całym panelu (bez walk-forward) i scenariusz
+    „słabego rynku” z testu PriceCharting, w którym model z 2023 oceniał zakupy z 2021 (look-ahead).
+    Oba usunięte po przeglądzie w Issue #13."""
+    return potential_for(cards["score"].rank(pct=True), table)
 
 
 REASONS = [  # (cecha, kierunek, opis) – czytelne powody przy karcie; to cechy, które model ceni, nie dokładny rozkład
@@ -117,11 +115,12 @@ REASONS = [  # (cecha, kierunek, opis) – czytelne powody przy karcie; to cechy
 
 
 def reasons(df: pd.DataFrame, top: int = 3) -> pd.Series:
-    """Do 3 najmocniejszych powodów: cechy, w których karta jest w górnych 30% swojej listy."""
+    """Do 3 cech, którymi karta wyróżnia się na liście (górne 30% w danej cesze). To NIE jest wkład cech
+    w predykcję modelu, tylko opis karty cechami, które model w teście uznawał za ważne (Issue #13)."""
     pct = pd.DataFrame({desc: (sign * df[c]).rank(pct=True) for c, sign, desc in REASONS if c in df})
     def pick(row):
         best = row[row >= 0.7].sort_values(ascending=False).head(top)
-        return ", ".join(best.index) if len(best) else "ogólnie wysoka ocena modelu"
+        return ", ".join(best.index) if len(best) else "bez jednej wyróżniającej cechy"
     return pct.apply(pick, axis=1)
 
 
@@ -369,33 +368,37 @@ def main() -> int:
     now["dodruk_posty"] = now.set_id.astype(str).map(rp).fillna(0).astype(int)
     inv = now[now.price_now >= MIN_CARD]
     now["score"] = (inv["szansa_50"].rank(pct=True) + inv["model_6m"].rank(pct=True)) / 2
-    cols = ["card_id", "name", "set_name", "price_now", "score", "potencjal_rok", "potencjal_od", "potencjal_do",
-            "potencjal_slaby",
-            "dodruk_posty", "dlaczego", "szansa_50", "model_6m", "combo", "spread", "poke_pop",
+    # szansa_50 tylko do logu wyborów: to ranga, nie prawdopodobieństwo (Issue #13), więc nie trafia do list
+    cols = ["card_id", "name", "set_name", "price_now", "score", "przedzial", "hist_mediana", "hist_p25", "hist_p75",
+            "dodruk_posty", "dlaczego", "model_6m", "combo", "spread", "poke_pop",
             "rv_z", "weeks_since_low", "buzz_share", "model_net_6m"]
     inv_idx = now.index[now.price_now >= MIN_CARD]
-    now = now.join(card_potential(panel, now.loc[inv_idx], potential))
+    now = now.join(card_potential(now.loc[inv_idx], potential))
+    if potential is not None and len(potential):
+        potential.assign(przedzial=[bin_label(b) for b in potential.index]).to_csv(
+            reports / "potential_table.csv", index=False)
     rank = now[now.price_now >= MIN_CARD].sort_values("score", ascending=False)
     rank["dlaczego"] = reasons(rank)
     # najwyżej 3 karty z jednego setu w czołówce: w teście ten sam zysk, a mniejsze ryzyko jednego setu
     first = rank.groupby("set_id").cumcount() < PER_SET
-    rank = pd.concat([rank[first], rank[~first]])[cols]
-    rank.to_csv(reports / "ranking.csv", index=False)
+    rank = pd.concat([rank[first], rank[~first]])
+    rank[cols].to_csv(reports / "ranking.csv", index=False)
     lines += [f"## Bieżący ranking modelu (karty od ${MIN_CARD:.0f})", "",
               f"Stan na {panel.date.max():%Y-%m-%d}. Kolejność wg `score` (0–1, wyżej = lepiej) = średnia rang modelu "
               "szukającego kart, które zdrożeją o 50%+ (`szansa_50`), i modelu zwrotu (`model_6m`); "
               "w teście ta para najlepiej wybierała karty na rok (sekcja 12 mies.). Z jednego setu najwyżej "
-              f"{PER_SET} karty na początku listy, kolejne trafiają niżej. `szansa_50` porządkuje karty, ale nie jest prawdziwym "
-              "prawdopodobieństwem – faktyczny odsetek wzrostów o 50%+ zależy głównie od stanu całego rynku. "
+              f"{PER_SET} karty na początku listy, kolejne trafiają niżej. `przedzial` = pozycja w rankingu, `hist_*` = jak rosły w rok "
+              "karty z tego przedziału w historii 2025–26 (słabsza z dwóch połówek okresu; opis historii, nie prognoza). "
               "`model_6m` = przewidywany log-zwrot ponad rynek w 6 mies. "
               "(0,20 ≈ +22%), `model_net_6m` = to samo po kosztach, "
               "`spread` = log(cena rynkowa / najniższa oferta), `dodruk_posty` = posty o dodruku setu na Reddicie "
               "w ostatnich 8 tyg. (3+ = ostrożnie: na historii takie karty wypadały ok. 14% gorzej od rynku w 6 mies.). To lista do sprawdzenia, nie rekomendacja zakupu.", "",
-              rank.drop(columns="card_id").head(25).to_markdown(index=False, floatfmt=".2f"), ""]
+              rank[cols].drop(columns="card_id").head(25).to_markdown(index=False, floatfmt=".2f"), ""]
     # tanie karty ($5–20): w teście 10 najwyżej ocenionych podwajało się w rok w ok. połowie przypadków
     cheap = now[now.price_now.between(5, MIN_CARD, inclusive="left")].copy()
     cheap["score"] = (cheap["szansa_50"].rank(pct=True) + cheap["model_6m"].rank(pct=True)) / 2
-    cheap.update(card_potential(panel, cheap, potential))
+    pot = card_potential(cheap, potential)
+    cheap[pot.columns] = pot
     cheap["dlaczego"] = reasons(cheap)
     cheap = cheap.sort_values("score", ascending=False)
     first = cheap.groupby("set_id").cumcount() < PER_SET
