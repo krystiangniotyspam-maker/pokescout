@@ -14,16 +14,28 @@ PR z uzasadnieniem i przeglądem drugiego modelu. Każdy nowy wariant testowany 
 
 ## 2. Daty
 
-- Dzień decyzji = niedziela kończąca tydzień (`date` w panelu), co 2 tygodnie. Mediana tygodnia zawiera tylko dane
-  do tej niedzieli włącznie.
-- W logu na żywo zapisujemy też `observed_at` (dzień najnowszych cen) i `run_at` (czas przebiegu, UTC).
-  `observed_at` nigdy nie może być późniejsze od najnowszego pliku cen ani od `run_at` (test w `tests/`).
+- **Backtest:** `date` to etykieta niedzieli kończącej tygodniowy koszyk, co 2 tygodnie. Mediana tygodnia
+  zawiera tylko obserwacje rzeczywiście dostępne do chwili liczenia danych (ostatni tydzień bywa niepełny).
+- **Live:** pole `date` w historycznym formacie CSV **nie jest dniem decyzji** — jest etykietą koszyka
+  `week_bucket_end` (niedziela, która może jeszcze nie nadejść). Faktyczny dzień decyzji to
+  `decision_at` w UTC, obliczony z `run_at`; `observed_at` to dzień ostatnich plików cen.
+  Weryfikujemy `observed_at <= decision_at <= data UTC z run_at`. Nigdy nie przedstawiamy
+  `week_bucket_end` jako rzeczywistej daty rekomendacji.
+- Historyczne rekordy zapisane **przed PR B.1** nie mają wiarygodnego `decision_at`; nie przypisujemy
+  im go wstecz na podstawie przyszłej niedzieli.
 
 ## 3. Cechy i model
 
 - Cechy liczone wyłącznie z danych do dnia decyzji (`pokescout/features.py`, `build_panel`).
 - Uczenie walk-forward: w dniu `d` model zna tylko wiersze z `date + horyzont ≤ d` (`walk_forward`).
-- Wersja modelu = `model_sha` (skrót kodu cech, modelu i rankingu oraz listy cech; `scripts/evaluate.py: model_sha`).
+- Wersja modelu = `model_sha` (skrót kodu cech, modelu, rankingu oraz listy cech).
+- Pochodzenie danych = `data_snapshot_hash` (SHA-256 nad ścieżkami i dokładnymi bajtami plików
+  wejściowych w `data/prices`, `data/catalog`, `data/buzz`, `data/cardmarket`; czytane strumieniowo).
+  `code_commit_sha` wskazuje commit kodu, `run_id` jedno uruchomienie, a `market`/`variant`/
+  `instrument_id` identyfikują kartę. `variant=unverified` to uczciwy brak rozpoznania wariantu,
+  nie zapewnienie o poprawności mapowania.
+- Sam SHA-256 **nie archiwizuje** snapshotu; odtworzenie wymaga zachowania źródłowych plików o tym hashu
+  (w historii Git lub osobnym niezmiennym magazynie). Na razie jest to fingerprint i kontrola zmian.
 
 ## 4. Wynik
 
@@ -32,20 +44,26 @@ PR z uzasadnieniem i przeglądem drugiego modelu. Każdy nowy wariant testowany 
 - Zwrot ponad rynek: minus mediana próby z punktu 1 w tej dacie.
 - Zwrot netto: obecnie koszty sprzedawcy w USA (13% + $1,5 w każdą stronę). **Docelowo koszty EU/PL**
   (prowizja Cardmarket, wysyłka, VAT i cło przy zakupie z USA, kurs) – plan C w Issue #13.
-- Braki ceny końcowej: top-K wybieramy przed rozliczeniem; raportujemy odsetek braków. Brak nie oznacza −100%
-  (karta fizycznie istnieje); wariant ostrożny = ostatnia znana cena.
+- **Stan obecny (do PR E):** `evaluate_scores` oraz `sealed.evaluate` filtrują brakujące ceny
+  końcowe przed Top-K. Dla kart chase od $20 test nie wykazał braków; dla sealed braki występują.
+  **Plan PR E:** Top-K wybierać przed rozliczeniem, raportować odsetek braków; brak ceny nie oznacza −100%.
 
 ## 5. Porównania (baseline)
 
-Każdy wynik strategii podajemy obok: mediany rynku (cała próba), prostej oceny C (stałe rangi czterech cech,
-bez uczenia) i losowego wyboru tej samej liczby kart.
+**Stan obecny:** porównujemy medianę rynku i prostą ocenę C (stałe rangi czterech cech, bez uczenia).
+**Plan PR C/E:** dodać losowy wybór tej samej liczby kart oraz koszt wykonania transakcji EU/PL.
 
 ## 6. Ocena na żywo
 
-- `reports/picks_log.csv` jest **tylko dopisywany**. Ponowny przebieg tej samej daty tym samym modelem niczego
-  nie zmienia, innym modelem dopisuje się obok.
-- Liczy się **pierwszy** zapis dla danej daty (`first_runs`). To jedyna miara, której nie da się dopasować
-  do historii; po 3 i 6 mies. rozliczamy ją w `reports/evaluation.md`.
+- `reports/picks_log.csv` jest logicznie **tylko dopisywany** (istniejące wiersze zachowują treść;
+  przy zmianie schematu CSV dochodzą nowe puste kolumny w rekordach historycznych). Powtórny przebieg
+  z tą samą etykietą tygodniową, `model_sha` i `data_snapshot_hash` jest pomijany.
+  **Zmiana choćby samych danych przy tym samym kodzie dopisuje nową rewizję**, z własnym `run_at`
+  i `run_id`. Dla oceny na żywo liczy się tylko najwcześniejszy zapis tygodnia
+  (w `first_runs`; dawne wiersze bez `run_at` są traktowane jako pierwotne).
+- Dane głównego rankingu są z TCGplayer USD; wariant karty nie jest jeszcze rzetelnie zmapowany.
+- W przyszłości osobne etykiety `primary/revision` można dodać dla czytelności; obecnie wynika to
+  z `first_runs`. Sama obserwacja `date` nadal oznacza koszyk, nie datę zakupu/wykonania.
 
 ## 7. Co wolno pokazywać w raporcie
 
