@@ -34,6 +34,10 @@ def load_reddit(data_dir: str | Path) -> pd.DataFrame:
     if not files:
         return pd.DataFrame(columns=["id", "created_utc", "title", "score", "num_comments"])
     df = pd.concat((pd.read_csv(f) for f in files), ignore_index=True).drop_duplicates("id")
+    # starsze archiwa potrafią mieć liczby zapisane jako tekst – zamieniamy, a nieczytelne wiersze pomijamy
+    for c in ("created_utc", "score", "num_comments"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    df = df.dropna(subset=["created_utc"])
     df["date"] = pd.to_datetime(df.created_utc, unit="s")
     return df
 

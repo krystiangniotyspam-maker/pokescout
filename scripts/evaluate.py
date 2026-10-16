@@ -151,7 +151,7 @@ def interest_section(data_dir: str, reports: Path) -> list[str]:
     files = sorted((Path(data_dir) / "buzz" / "reddit" / "PokemonTCG").glob("*.csv.gz"))
     if not files:
         return []
-    n = pd.Series({pd.Period(f.name[:7], "M"): pd.read_csv(f, usecols=["num_comments"]).num_comments.clip(lower=0).sum()
+    n = pd.Series({pd.Period(f.name[:7], "M"): pd.to_numeric(pd.read_csv(f, usecols=["num_comments"]).num_comments, errors="coerce").clip(lower=0).sum()
                    for f in files})
     n = n[n.index < pd.Timestamp.utcnow().tz_localize(None).to_period("M")]  # bez bieżącego, niepełnego
     if len(n) < 15:

@@ -34,7 +34,9 @@ jobs:
         timeout-minutes: 10
         run: python scripts/collect_cardmarket.py
       - name: Test na historii, model i ranking
-        run: python scripts/evaluate.py
+        # przy błędzie końcówka komunikatu trafia do adnotacji przebiegu (widać ją bez pobierania logów)
+        run: |
+          python scripts/evaluate.py 2> err.txt || { cat err.txt >&2; tail -n 8 err.txt | sed 's/^/::error title=evaluate::/'; exit 1; }
       - name: Discord – raport miesiąca lub alerty
         continue-on-error: true   # błąd Discorda nie blokuje zapisu rankingu
         env:
@@ -42,6 +44,7 @@ jobs:
         # pierwszy poniedziałek miesiąca: pełny raport, w inne tygodnie tylko alerty; ręczne uruchomienie = pełny raport
         run: python scripts/notify_discord.py ${{ github.event_name == 'workflow_dispatch' && '--full' || '' }}
       - name: Zapisz w repo
+        if: always()   # pobrane posty i ceny zapisujemy też wtedy, gdy ranking się nie udał
         run: |
           git config user.name "pokescout-bot"
           git config user.email "pokescout-bot@users.noreply.github.com"
