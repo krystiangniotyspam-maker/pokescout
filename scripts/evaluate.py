@@ -71,6 +71,27 @@ def potential_for(pct: pd.Series, table: pd.DataFrame) -> pd.DataFrame:
                          "potencjal_do": b.map(table["p75"]).astype(float)}, index=pct.index)
 
 
+def card_potential(panel: pd.DataFrame, cards: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
+    """Potencjał osobno dla każdej karty: średnia z przedziału rankingu (jak rosły w rok podobnie ocenione
+    karty) plus połowa różnicy, o ile model uczony wprost na zwrotach rocznych ocenia tę kartę lepiej lub
+    gorzej od reszty przedziału. Model roczny ma tylko ~14 dat z wynikiem i na krótszej historii bywał
+    zawodny, więc bierzemy go w połowie; zakres (25.–75. percentyl) przesuwamy razem z oceną."""
+    base = potential_for(cards["score"], table)
+    hist = panel[panel.fwd_12.notna() & (panel.price_now >= 5)]
+    if base.empty or hist.date.nunique() < 6:
+        return base
+    from sklearn.ensemble import HistGradientBoostingRegressor
+    m = HistGradientBoostingRegressor(max_depth=3, learning_rate=0.05, max_iter=200, min_samples_leaf=200,
+                                      random_state=0).fit(hist[FEATURES], hist.fwd_12)
+    own = pd.Series(np.expm1(m.predict(cards[FEATURES])), index=cards.index).clip(-0.5, 2.0)
+    # tylko różnice między kartami (o ile karta jest lepsza/gorsza od podobnie ocenionych), bez poziomu rynku
+    bins = pd.cut(cards["score"], POT_BINS, include_lowest=True)
+    shift = 0.5 * (own - own.groupby(bins, observed=True).transform("median"))
+    est = base["potencjal_rok"] + shift
+    return pd.DataFrame({"potencjal_rok": est, "potencjal_od": base["potencjal_od"] + shift,
+                         "potencjal_do": base["potencjal_do"] + shift}, index=cards.index)
+
+
 REASONS = [  # (cecha, kierunek, opis) – czytelne powody przy karcie; to cechy, które model ceni, nie dokładny rozkład
     ("poke_pop", 1, "popularny Pokémon"),
     ("rv_z", -1, "tańsza niż podobne karty"),
@@ -273,7 +294,8 @@ def main() -> int:
     cols = ["card_id", "name", "set_name", "price_now", "score", "potencjal_rok", "potencjal_od", "potencjal_do",
             "dodruk_posty", "dlaczego", "szansa_50", "model_6m", "combo", "spread", "poke_pop",
             "rv_z", "weeks_since_low", "buzz_share", "model_net_6m"]
-    now = now.join(potential_for(now["score"], potential))
+    inv_idx = now.index[now.price_now >= MIN_CARD]
+    now = now.join(card_potential(panel, now.loc[inv_idx], potential))
     rank = now[now.price_now >= MIN_CARD].sort_values("score", ascending=False)
     rank["dlaczego"] = reasons(rank)
     # najwyżej 3 karty z jednego setu w czołówce: w teście ten sam zysk, a mniejsze ryzyko jednego setu
@@ -294,7 +316,7 @@ def main() -> int:
     # tanie karty ($5–20): w teście 10 najwyżej ocenionych podwajało się w rok w ok. połowie przypadków
     cheap = now[now.price_now.between(5, MIN_CARD, inclusive="left")].copy()
     cheap["score"] = (cheap["szansa_50"].rank(pct=True) + cheap["model_6m"].rank(pct=True)) / 2
-    cheap.update(potential_for(cheap["score"], potential))
+    cheap.update(card_potential(panel, cheap, potential))
     cheap["dlaczego"] = reasons(cheap)
     cheap = cheap.sort_values("score", ascending=False)
     first = cheap.groupby("set_id").cumcount() < PER_SET

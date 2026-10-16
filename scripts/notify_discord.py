@@ -86,8 +86,8 @@ def build() -> str:
             out.append(f"{i}. **[{r['name']}](https://www.tcgplayer.com/product/{r.product_id})** · "
                        f"${r.price_now:.0f}{eur} · [Cardmarket]({_cm_link(r['name'])}){warn}")
         out += [""]
-    out += ["📈 = o ile w latach 2025–26 rosły w ciągu roku karty równie wysoko w rankingu, i do jakiej ceny "
-            "dochodziłaby ta karta (mocny rynek – w słabszym roku mniej; dłużej niż rok nie da się jeszcze sprawdzić). "
+    out += ["📈 = prognoza na rok dla tej karty: jak w latach 2025–26 rosły karty podobnie ocenione i o podobnych cechach, "
+            "i do jakiej ceny by doszła (mocny rynek – w słabszym roku mniej; dłużej niż rok nie da się jeszcze sprawdzić). "
             "💬 = dlaczego karta jest wysoko.",
             "Kupuj kilka pozycji, nie jedną. ⚠️ dodruk = dużo postów o dodruku setu.",
             f"Pełne listy: {REPO_URL}/ranking.csv · {REPO_URL}/sealed_ranking.csv"]
