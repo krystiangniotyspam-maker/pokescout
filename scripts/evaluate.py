@@ -20,6 +20,7 @@ sys.path.insert(0, str(ROOT))
 
 from pokescout.buzz import buzz_features, load_reddit, reprint_mentions  # noqa: E402
 from pokescout.data import load_repo_history  # noqa: E402
+from pokescout.provenance import code_commit_sha, data_snapshot_hash  # noqa: E402
 from pokescout.tiers import pokemon_key  # noqa: E402
 from pokescout import sealed  # noqa: E402
 from pokescout.tcgcsv import CHASE_RARITIES  # noqa: E402
@@ -124,7 +125,7 @@ def reasons(df: pd.DataFrame, top: int = 3) -> pd.Series:
     return pct.apply(pick, axis=1)
 
 
-def market_section(panel: pd.DataFrame, reports: Path) -> list[str]:
+def market_section(panel: pd.DataFrame, reports: Path, seen_at: str = "") -> list[str]:
     """Kiedy kupować: tempo całego rynku (mediana trendów kart) a późniejszy zwrot mediany rynku."""
     idx = panel.groupby("date").agg(trend_90=("slope_90", "median"), trend_180=("slope_180", "median"),
                                     zwrot_3m=("fwd_3", "median"), zwrot_6m=("fwd_6", "median"))
@@ -132,14 +133,16 @@ def market_section(panel: pd.DataFrame, reports: Path) -> list[str]:
     now = idx.iloc[-1]
     pct = lambda c: (idx[c] <= now[c]).mean()
     (reports / "market.json").write_text(json.dumps(
-        {"date": f"{idx.index[-1]:%Y-%m-%d}", "trend_90": round(float(now.trend_90), 4),
+        {"date": seen_at or f"{idx.index[-1]:%Y-%m-%d}",
+         "week_bucket_end": f"{idx.index[-1]:%Y-%m-%d}", "trend_90": round(float(now.trend_90), 4),
          "pct_90": round(float(pct("trend_90")), 3)}))
     return ["## Rynek: kiedy kupować", "",
             "Trend rynku = mediana trendów cen wszystkich kart (%/mies.). Na historii szybki wzrost rynku "
             "zapowiadał słabsze kolejne miesiące, a spokojny lub spadający rynek – lepsze (korelacja rang poniżej; "
             "to tylko ok. 2 cykle, więc traktuj orientacyjnie).", "",
             corr.round(2).to_markdown(), "",
-            f"Teraz ({idx.index[-1]:%Y-%m-%d}): trend 90 dni {now.trend_90:+.1%}/mies. "
+            f"Teraz (ceny do {seen_at or str(idx.index[-1].date())}; etykieta tygodnia "
+            f"{idx.index[-1]:%Y-%m-%d}): trend 90 dni {now.trend_90:+.1%}/mies. "
             f"(wyżej niż w {pct('trend_90'):.0%} historii), trend 180 dni {now.trend_180:+.1%}/mies. "
             f"(wyżej niż w {pct('trend_180'):.0%} historii).", ""]
 
@@ -211,55 +214,116 @@ def observed_at(data_dir: str | Path) -> str:
 
 
 def first_runs(log: pd.DataFrame) -> pd.DataFrame:
-    """Do oceny na żywo liczy się tylko PIERWSZY zapis wyborów dla danej daty (PROTOCOL.md). Wiersze sprzed
-    wprowadzenia `run_at` traktujemy jako pierwsze."""
+    """Primary weekly picks are the first recorded run per week bucket.
+
+    Historical rows without run_at have priority (their exact decision time was not
+    recorded). Revisions with changed model OR input data never replace the primary.
+    The legacy 'date' column is a week-bucket label, NOT the actual decision date.
+    """
     if "run_at" not in log or log.empty:
         return log
-    ra = log["run_at"].fillna("")
-    first = ra.groupby(log["date"]).transform("min")
-    return log[ra == first]
+    timestamps = log["run_at"].fillna("")
+    first = timestamps.groupby(log["date"]).transform("min")
+    return log[timestamps == first]
 
 
 def track_live(panel: pd.DataFrame, rank: pd.DataFrame, reports: Path, seen_at: str = "",
-               run_at: str | None = None) -> list[str]:
-    """Kontrola na żywo: zapisuje top-20 z każdego dnia rankingu i rozlicza je, gdy minie horyzont.
+               run_at: str | None = None, snapshot_hash: str | None = None,
+               source_sha: str | None = None) -> list[str]:
+    """Append immutable weekly forecasts and preserve later model/data revisions.
 
-    Te wybory powstały bez znajomości przyszłości, więc to jedyny test, którego nie da się
-    (nawet nieświadomie) dopasować do historii. Log jest tylko dopisywany: ponowny przebieg tej samej
-    daty tym samym modelem niczego nie zmienia, innym modelem – dopisuje się obok, a w ocenie liczy się
-    pierwszy zapis."""
+    date / week_bucket_end = Sunday panel aggregation label, possibly in the
+    future for an incomplete week; decision_at = actual UTC run calendar date.
+    Different data snapshots on the same week/model produce a revision, never
+    an overwrite. Later outcome evaluation uses the first-ever saved forecast.
+    """
     log_f = reports / "picks_log.csv"
-    log = pd.read_csv(log_f, parse_dates=["date"], dtype={"card_id": str}) if log_f.exists() else pd.DataFrame()
-    today, sha = panel.date.max(), model_sha()
-    run_at = run_at or dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    same = len(log) and "model_sha" in log and ((log.date == today) & (log.model_sha == sha)).any()
+    log = (pd.read_csv(log_f, parse_dates=["date"], dtype={"card_id": str})
+           if log_f.exists() else pd.DataFrame())
+    week_bucket_end, sha = pd.Timestamp(panel.date.max()), model_sha()
+    timestamp = pd.Timestamp(run_at or dt.datetime.now(dt.timezone.utc))
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.tz_localize("UTC")
+    else:
+        timestamp = timestamp.tz_convert("UTC")
+    run_at = timestamp.strftime("%Y-%m-%dT%H:%M:%SZ")
+    decision_at = timestamp.strftime("%Y-%m-%d")
+
+    if seen_at and pd.Timestamp(seen_at).date() > timestamp.date():
+        raise ValueError("observed_at cannot be later than the actual decision date")
+
+    snapshot_hash = snapshot_hash if snapshot_hash is not None else data_snapshot_hash(ROOT / "data")
+    if not snapshot_hash:
+        raise ValueError("data snapshot hash is required")
+    source_sha = source_sha if source_sha is not None else code_commit_sha(ROOT)
+    run_id = hashlib.sha256(
+        f"{week_bucket_end.isoformat()}|{run_at}|{sha}|{snapshot_hash}".encode()
+    ).hexdigest()[:20]
+
+    # The legacy log may lack fingerprint columns. Such rows remain unchanged,
+    # while the first new run is appended as a separately versioned revision.
+    same = (
+        len(log) > 0
+        and {"model_sha", "data_snapshot_hash"}.issubset(log.columns)
+        and ((log["date"] == week_bucket_end)
+             & (log["model_sha"] == sha)
+             & (log["data_snapshot_hash"] == snapshot_hash)).any()
+    )
     if not same:
-        top = rank.head(TOP_K).assign(date=today, rank=range(1, min(TOP_K, len(rank)) + 1),
-                                      model_sha=sha, observed_at=seen_at, run_at=run_at)
-        new = top[["date", "rank", "card_id", "name", "price_now", "score", "szansa_50", "model_6m", "combo",
-                   "model_sha", "observed_at", "run_at"]]
+        top = rank.head(TOP_K).assign(
+            date=week_bucket_end,
+            week_bucket_end=week_bucket_end.strftime("%Y-%m-%d"),
+            decision_at=decision_at,
+            rank=range(1, min(TOP_K, len(rank)) + 1),
+            model_sha=sha,
+            data_snapshot_hash=snapshot_hash,
+            code_commit_sha=source_sha,
+            observed_at=seen_at,
+            run_at=run_at,
+            run_id=run_id,
+            market="TCGplayer_USD",
+            variant="unverified",
+        )
+        top["instrument_id"] = ("tcgplayer:" + top["card_id"].astype(str)
+                                + ":variant-unverified:USD")
+        new = top[[
+            "date", "rank", "card_id", "name", "price_now", "score", "szansa_50",
+            "model_6m", "combo", "model_sha", "observed_at", "run_at",
+            "week_bucket_end", "decision_at", "data_snapshot_hash",
+            "code_commit_sha", "run_id", "market", "variant", "instrument_id",
+        ]]
         log = pd.concat([log, new], ignore_index=True) if len(log) else new
         log.to_csv(log_f, index=False)
-    lines = ["## Kontrola na żywo", "",
-             f"Każdy przebieg dopisuje top-{TOP_K} do `reports/picks_log.csv` (z wersją modelu i dniem cen); "
-             "po 3 i 6 mies. liczymy, jak wypadły. Liczy się pierwszy zapis dla danej daty (PROTOCOL.md).", ""]
+
+    lines = [
+        "## Kontrola na żywo", "",
+        f"Każdy przebieg dopisuje top-{TOP_K} do `reports/picks_log.csv` z wersją modelu i hashami danych. "
+        "Pierwszy zapis dla każdej etykiety tygodniowej jest podstawą rozliczenia; kolejne są rewizjami. "
+        "Pole `date` jest etykietą tygodnia, a `decision_at` prawdziwą datą decyzji (UTC).", "",
+    ]
     rows = []
     p = panel.assign(card_id=panel.card_id.astype(str))
     for h in (3, 6):
-        j = first_runs(log).merge(p[["date", "card_id", f"ex_{h}", f"net_{h}"]], on=["date", "card_id"], how="left")
+        j = first_runs(log).merge(
+            p[["date", "card_id", f"ex_{h}", f"net_{h}"]],
+            on=["date", "card_id"], how="left",
+        )
         done = j[j[f"ex_{h}"].notna()]
         for d, g in done.groupby("date"):
-            rows.append(dict(data=f"{d:%Y-%m-%d}", horyzont=f"{h} mies.", kart=len(g),
-                             ponad_rynek=f"{np.expm1(g[f'ex_{h}'].mean()):+.1%}",
-                             pobilo_rynek=f"{(g[f'ex_{h}'] > 0).mean():.0%}",
-                             netto=f"{g[f'net_{h}'].mean():+.1%}"))
+            rows.append(dict(
+                tydzien=f"{d:%Y-%m-%d}", horyzont=f"{h} mies.", kart=len(g),
+                ponad_rynek=f"{np.expm1(g[f'ex_{h}'].mean()):+.1%}",
+                pobilo_rynek=f"{(g[f'ex_{h}'] > 0).mean():.0%}",
+                netto=f"{g[f'net_{h}'].mean():+.1%}",
+            ))
     if rows:
         lines += [pd.DataFrame(rows).to_markdown(index=False), ""]
     else:
-        lines += [f"Zapisane dni z wyborami: {log.date.nunique()}. Pierwsze wyniki po 3 mies. "
-                  f"od {log.date.min():%Y-%m-%d}.", ""]
+        lines += [
+            f"Zapisane etykiety tygodniowe: {log.date.nunique()}. Pierwsze wyniki po 3 mies. "
+            f"od tygodnia {log.date.min():%Y-%m-%d}.", "",
+        ]
     return lines
-
 
 def main() -> int:
     import argparse
@@ -272,6 +336,7 @@ def main() -> int:
     if not n_days:
         print("Brak danych w data/prices")
         return 1
+    latest_observation = observed_at(a.data)
     posts = load_reddit(a.data)
     buzz = buzz_features(posts, {pokemon_key(m.name) for m in metas.values()}) if len(posts) else None
     print(f"Posty z Reddita: {len(posts)}")
@@ -384,7 +449,8 @@ def main() -> int:
     rank = pd.concat([rank[first], rank[~first]])
     rank[cols].to_csv(reports / "ranking.csv", index=False)
     lines += [f"## Bieżący ranking modelu (karty od ${MIN_CARD:.0f})", "",
-              f"Stan na {panel.date.max():%Y-%m-%d}. Kolejność wg `score` (0–1, wyżej = lepiej) = średnia rang modelu "
+              f"Ceny do {latest_observation}; etykieta tygodniowa {panel.date.max():%Y-%m-%d}. "
+              "Kolejność wg `score` (0–1, wyżej = lepiej) = średnia rang modelu "
               "szukającego kart, które zdrożeją o 50%+ (`szansa_50`), i modelu zwrotu (`model_6m`); "
               "w teście ta para najlepiej wybierała karty na rok (sekcja 12 mies.). Z jednego setu najwyżej "
               f"{PER_SET} karty na początku listy, kolejne trafiają niżej. `przedzial` = pozycja w rankingu, `hist_*` = jak rosły w rok "
@@ -408,10 +474,15 @@ def main() -> int:
               "Ta sama ocena co wyżej, dla tańszych kart (pełna lista w `reports/ranking_tanie.csv`). "
               "Przy takich kwotach wysyłka zjada dużą część zysku, więc to raczej lista na lata niż na szybki obrót.", "",
               cheap.drop(columns="card_id").head(20).to_markdown(index=False, floatfmt=".2f"), ""]
-    lines += market_section(panel, reports)
+    lines += market_section(panel, reports, seen_at=latest_observation)
     lines += interest_section(a.data, reports)
     lines += sealed_section(a.data, reports, rp)
-    lines += track_live(panel, rank, reports, seen_at=observed_at(a.data))
+    lines += track_live(
+        panel, rank, reports,
+        seen_at=latest_observation,
+        snapshot_hash=data_snapshot_hash(a.data),
+        source_sha=code_commit_sha(ROOT),
+    )
     (reports / "evaluation.md").write_text("\n".join(lines))
     print("\n".join(lines))
     return 0
